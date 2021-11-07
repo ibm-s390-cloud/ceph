@@ -28,10 +28,11 @@ extraopts += -DWITH_RBD_RWL=ON
 extraopts += -DWITH_RBD_SSD_CACHE=ON
 
 # s390x flags
-extraopts += -DWITH_RDMA=OFF
+# extraopts += -DWITH_RDMA=OFF
 extraopts += -DWITH_SPDK=OFF
 extraopts += -DWITH_SYSTEM_PMDK=OFF
-extraopts += -DWITH_BLUESTORE_PMEM=OFF
+# extraopts += -DWITH_BLUESTORE_PMEM=OFF
+extraopts += -DWITH_RBD_RWL=OFF
 extraopts += -DCMAKE_BUILD_TYPE=RelWithDebInfo
 
 # assumes that ceph is exmpt from multiarch support, so we override the libdir.
