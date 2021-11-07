@@ -28,6 +28,7 @@ extraopts += -DWITH_RBD_RWL=ON
 extraopts += -DWITH_RBD_SSD_CACHE=ON
 
 # s390x flags
+extraopts += -DWITH_RDMA=OFF
 extraopts += -DWITH_SPDK=OFF
 extraopts += -DWITH_SYSTEM_PMDK=OFF
 extraopts += -DWITH_BLUESTORE_PMEM=OFF
