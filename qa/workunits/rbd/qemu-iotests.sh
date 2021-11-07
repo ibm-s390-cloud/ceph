@@ -25,9 +25,9 @@ fi
 cd tests/qemu-iotests
 mkdir bin
 # qemu-iotests expects a binary called just 'qemu' to be available
-if [ -x '/usr/bin/qemu-system-x86_64' ]
+if [ -x '/usr/bin/qemu-system-s390x' ]
 then
-    QEMU='/usr/bin/qemu-system-x86_64'
+    QEMU='/usr/bin/qemu-system-s390x'
 
     # Bionic (v2.11.0) tests expect all tools in current directory
     ln -s $QEMU qemu
