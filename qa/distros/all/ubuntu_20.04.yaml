@@ -1,1 +1,2 @@
-../all/ubuntu_20.04.yaml
+os_type: ubuntu
+os_version: "20.04"
