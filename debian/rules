@@ -34,7 +34,7 @@ extraopts += -DCMAKE_BUILD_TYPE=RelWithDebInfo
 
 # extraopts += -DWITH_BLUESTORE_PMEM=OFF
 # extraopts += -DWITH_RDMA=OFF
-extraopts += -DWITH_RBD_RWL=OFF
+# extraopts += -DWITH_RBD_RWL=OFF
 
 # assumes that ceph is exmpt from multiarch support, so we override the libdir.
 extraopts += -DCMAKE_INSTALL_LIBDIR=/usr/lib
