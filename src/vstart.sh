@@ -1142,7 +1142,7 @@ start_ganesha() {
     ceph_adm orch set backend test_orchestrator
     ceph_adm test_orchestrator load_data -i $CEPH_ROOT/src/pybind/mgr/test_orchestrator/dummy_data.json
     prun ceph_adm nfs cluster create $cluster_id
-    prun ceph_adm nfs export create cephfs "a" $cluster_id "/cephfs"
+    prun ceph_adm nfs export create cephfs --fsname "a" --cluster-id $cluster_id --pseudo-path "/cephfs"
 
     for name in a b c d e f g h i j k l m n o p
     do
@@ -1204,10 +1204,6 @@ EOF
 
         echo "$test_user ganesha daemon $name started on port: $port"
     done
-
-    if $with_mgr_dashboard; then
-        ceph_adm dashboard set-ganesha-clusters-rados-pool-namespace "$cluster_id:$pool_name/$cluster_id"
-    fi
 }
 
 if [ "$debug" -eq 0 ]; then
@@ -1586,13 +1582,13 @@ if [ $GANESHA_DAEMON_NUM -gt 0 ]; then
 	port="2049"
         prun ceph_adm nfs cluster create $cluster_id
 	if [ $CEPH_NUM_MDS -gt 0 ]; then
-            prun ceph_adm nfs export create cephfs "a" $cluster_id $pseudo_path
+            prun ceph_adm nfs export create cephfs --fsname "a" --cluster-id $cluster_id --pseudo-path $pseudo_path
 	    echo "Mount using: mount -t nfs -o port=$port $IP:$pseudo_path mountpoint"
 	fi
 	if [ "$CEPH_NUM_RGW" -gt 0 ]; then
             pseudo_path="/rgw"
             do_rgw_create_bucket
-	    prun ceph_adm nfs export create rgw "nfs-bucket" $cluster_id $pseudo_path
+	    prun ceph_adm nfs export create rgw --cluster-id $cluster_id --pseudo-path $pseudo_path --bucket "nfs-bucket"
             echo "Mount using: mount -t nfs -o port=$port $IP:$pseudo_path mountpoint"
 	fi
     else
