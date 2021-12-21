@@ -3063,6 +3063,11 @@ void OSDMap::encode(ceph::buffer::list& bl, uint64_t features) const
   crc_le = crc;
   crc_filler->copy_in(4, (char*)&crc_le);
   crc_defined = true;
+
+  printf("------- crc %u :", crc);
+  printf("\n");
+  bl.hexdump(cout, false);
+  printf("\n");
 }
 
 /* for a description of osdmap versions, and when they were introduced, please
