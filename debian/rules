@@ -22,6 +22,7 @@ extraopts += -DWITH_SPDK=OFF
 extraopts += -DWITH_SYSTEM_PMDK=OFF
 extraopts += -DWITH_RBD_RWL=OFF
 extraopts += -DCMAKE_BUILD_TYPE=Debug
+extraopts += -DALLOCATOR=tcmalloc
 
 extraopts += -DWITH_OCF=ON -DWITH_LTTNG=ON
 extraopts += -DWITH_MGR_DASHBOARD_FRONTEND=OFF
