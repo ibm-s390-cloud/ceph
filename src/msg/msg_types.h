@@ -330,6 +330,9 @@ struct entity_addr_t {
       // pre-zero, since we're only copying a portion of the source
       memset(&u, 0, sizeof(u));
       memcpy(&u.sin6, sa, sizeof(u.sin6));
+
+      u.sin6.sin6_flowinfo=ntohs(u.sin6.sin6_flowinfo);
+
       break;
     case AF_UNSPEC:
       memset(&u, 0, sizeof(u));
