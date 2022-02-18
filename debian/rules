@@ -17,7 +17,12 @@ else
   export CEPH_OSD_BASENAME = crimson-osd
 endif
 
+# s390x debug flags
+extraopts += -DWITH_SPDK=OFF
+extraopts += -DWITH_SYSTEM_PMDK=OFF
+extraopts += -DWITH_RBD_RWL=OFF
 extraopts += -DCMAKE_BUILD_TYPE=Release
+extraopts += -DWITH_RBD_SSD_CACHE=ON
 
 extraopts += -DWITH_OCF=ON -DWITH_LTTNG=ON
 extraopts += -DWITH_MGR_DASHBOARD_FRONTEND=OFF
