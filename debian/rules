@@ -17,6 +17,8 @@ else
   export CEPH_OSD_BASENAME = crimson-osd
 endif
 
+extraopts += -DCMAKE_BUILD_TYPE=Release
+
 extraopts += -DWITH_OCF=ON -DWITH_LTTNG=ON
 extraopts += -DWITH_MGR_DASHBOARD_FRONTEND=OFF
 extraopts += -DWITH_PYTHON3=3
