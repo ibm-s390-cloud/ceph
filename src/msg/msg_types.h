@@ -217,8 +217,8 @@ struct entity_addr_t {
     }
   };
 
-  __u32 type;
-  __u32 nonce;
+  ceph_le32 type;
+  ceph_le32 nonce;
   union {
     sockaddr sa;
     sockaddr_in sin;
