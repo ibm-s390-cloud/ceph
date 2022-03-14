@@ -17,13 +17,6 @@ else
   export CEPH_OSD_BASENAME = crimson-osd
 endif
 
-# s390x
-extraopts += -DWITH_SPDK=OFF
-extraopts += -DWITH_SYSTEM_PMDK=OFF
-extraopts += -DWITH_RBD_RWL=OFF
-extraopts += -DCMAKE_BUILD_TYPE=Release
-
-
 extraopts += -DWITH_OCF=ON -DWITH_LTTNG=ON
 extraopts += -DWITH_MGR_DASHBOARD_FRONTEND=OFF
 extraopts += -DWITH_PYTHON3=3
@@ -42,6 +35,12 @@ ifneq (,$(filter parallel=%,$(DEB_BUILD_OPTIONS)))
   NUMJOBS = $(patsubst parallel=%,%,$(filter parallel=%,$(DEB_BUILD_OPTIONS)))
   extraopts += -DBOOST_J=$(NUMJOBS)
 endif
+
+# s390x opts
+extraopts += -DWITH_SPDK=OFF
+extraopts += -DWITH_SYSTEM_PMDK=OFF
+extraopts += -DWITH_RBD_RWL=OFF
+extraopts += -DCMAKE_BUILD_TYPE=Release
 
 %:
 	dh $@ --buildsystem=cmake --with javahelper,python3,systemd --parallel
