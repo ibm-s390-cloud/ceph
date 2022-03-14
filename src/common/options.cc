@@ -4030,11 +4030,11 @@ std::vector<Option> get_global_options() {
     .set_description(""),
 
     Option("osd_max_object_name_len", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
-    .set_default(2048)
+    .set_default(400)
     .set_description(""),
 
     Option("osd_max_object_namespace_len", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
-    .set_default(256)
+    .set_default(64)
     .set_description(""),
 
     Option("osd_max_attr_name_len", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
