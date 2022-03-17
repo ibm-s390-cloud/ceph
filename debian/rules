@@ -41,6 +41,12 @@ else
   extraopts += -DWITH_BOOST_CONTEXT=OFF
 endif
 
+# s390x debug flags
+extraopts += -DWITH_SPDK=OFF
+extraopts += -DWITH_SYSTEM_PMDK=OFF
+extraopts += -DWITH_RBD_RWL=OFF
+extraopts += -DCMAKE_BUILD_TYPE=Release
+
 %:
 	dh $@ --buildsystem=cmake --with javahelper,python3,systemd --parallel
 
