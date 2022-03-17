@@ -248,18 +248,22 @@ struct entity_addr_t {
     }
   };
 
-  __u32 type;
-  __u32 nonce;
+  ceph_le32 type;
+  ceph_le32 nonce;
   union {
     sockaddr sa;
     sockaddr_in sin;
     sockaddr_in6 sin6;
   } u;
 
-  entity_addr_t() : type(0), nonce(0) {
+  entity_addr_t() {
+    type = init_le32(0);
+    nonce = init_le32(0);
     memset(&u, 0, sizeof(u));
   }
-  entity_addr_t(__u32 _type, __u32 _nonce) : type(_type), nonce(_nonce) {
+  entity_addr_t(__u32 _type, __u32 _nonce) {
+    type = init_le32(_type);
+    nonce = init_le32(_nonce);
     memset(&u, 0, sizeof(u));
   }
   explicit entity_addr_t(const ceph_entity_addr &o) {
@@ -272,13 +276,13 @@ struct entity_addr_t {
   }
 
   uint32_t get_type() const { return type; }
-  void set_type(uint32_t t) { type = t; }
+  void set_type(uint32_t t) { type = init_le32(t); }
   bool is_legacy() const { return type == TYPE_LEGACY; }
   bool is_msgr2() const { return type == TYPE_MSGR2; }
   bool is_any() const { return type == TYPE_ANY; }
 
   __u32 get_nonce() const { return nonce; }
-  void set_nonce(__u32 n) { nonce = n; }
+  void set_nonce(__u32 n) { nonce = init_le32(n); }
 
   int get_family() const {
     return u.sa.sa_family;
@@ -545,12 +549,12 @@ WRITE_CLASS_ENCODER_FEATURES(entity_addr_t)
 
 std::ostream& operator<<(std::ostream& out, const entity_addr_t &addr);
 
-inline bool operator==(const entity_addr_t& a, const entity_addr_t& b) { return memcmp(&a, &b, sizeof(a)) == 0; }
-inline bool operator!=(const entity_addr_t& a, const entity_addr_t& b) { return memcmp(&a, &b, sizeof(a)) != 0; }
-inline bool operator<(const entity_addr_t& a, const entity_addr_t& b) { return memcmp(&a, &b, sizeof(a)) < 0; }
-inline bool operator<=(const entity_addr_t& a, const entity_addr_t& b) { return memcmp(&a, &b, sizeof(a)) <= 0; }
-inline bool operator>(const entity_addr_t& a, const entity_addr_t& b) { return memcmp(&a, &b, sizeof(a)) > 0; }
-inline bool operator>=(const entity_addr_t& a, const entity_addr_t& b) { return memcmp(&a, &b, sizeof(a)) >= 0; }
+inline bool operator==(const entity_addr_t& a, const entity_addr_t& b) { return a.nonce == b.nonce; }
+inline bool operator!=(const entity_addr_t& a, const entity_addr_t& b) { return a.nonce != b.nonce; }
+inline bool operator<(const entity_addr_t& a, const entity_addr_t& b) { return a.nonce < b.nonce; }
+inline bool operator<=(const entity_addr_t& a, const entity_addr_t& b) { return a.nonce <= b.nonce; }
+inline bool operator>(const entity_addr_t& a, const entity_addr_t& b) { return a.nonce > b.nonce; }
+inline bool operator>=(const entity_addr_t& a, const entity_addr_t& b) { return a.nonce >= b.nonce; }
 
 namespace std {
 template<> struct hash<entity_addr_t> {
