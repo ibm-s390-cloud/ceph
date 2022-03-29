@@ -259,18 +259,22 @@ public:
       return;
     }
 
-    for (auto &f : filesystems) {
-      string_view fs_name = f.second->mds_map.get_fs_name();
-      if (std::find(allowed.begin(), allowed.end(), fs_name) == allowed.end()) {
-	filesystems.erase(f.first);
-      }
+    for(auto it = filesystems.begin(); it != filesystems.end();) {
+      std::pair<fs_cluster_id_t, Filesystem::ref> el = * it;
+      std::string_view fs_name = el.second->mds_map.get_fs_name();
+      if (std::find(allowed.begin(), allowed.end(), fs_name) == allowed.end())
+        it = filesystems.erase( it );
+      else
+        ++ it;
     }
 
-    for (auto r : mds_roles) {
-      string_view fs_name = fs_name_from_gid(r.first);
-      if (std::find(allowed.begin(), allowed.end(), fs_name) == allowed.end()) {
-	mds_roles.erase(r.first);
-      }
+    for(auto it = mds_roles.begin(); it != mds_roles.end();) {
+      std::pair<mds_gid_t, fs_cluster_id_t> el = * it;
+      std::string_view fs_name = fs_name_from_gid(el.first);
+      if (std::find(allowed.begin(), allowed.end(), fs_name) == allowed.end())
+        it = mds_roles.erase( it );
+      else
+        ++ it;
     }
   }
 
