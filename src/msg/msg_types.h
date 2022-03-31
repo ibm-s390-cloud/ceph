@@ -548,12 +548,80 @@ WRITE_CLASS_ENCODER_FEATURES(entity_addr_t)
 
 std::ostream& operator<<(std::ostream& out, const entity_addr_t &addr);
 
-inline bool operator==(const entity_addr_t& a, const entity_addr_t& b) { return memcmp(&a, &b, sizeof(a)) == 0; }
-inline bool operator!=(const entity_addr_t& a, const entity_addr_t& b) { return memcmp(&a, &b, sizeof(a)) != 0; }
-inline bool operator<(const entity_addr_t& a, const entity_addr_t& b) { return memcmp(&a, &b, sizeof(a)) < 0; }
-inline bool operator<=(const entity_addr_t& a, const entity_addr_t& b) { return memcmp(&a, &b, sizeof(a)) <= 0; }
-inline bool operator>(const entity_addr_t& a, const entity_addr_t& b) { return memcmp(&a, &b, sizeof(a)) > 0; }
-inline bool operator>=(const entity_addr_t& a, const entity_addr_t& b) { return memcmp(&a, &b, sizeof(a)) >= 0; }
+// inline bool operator==(const entity_addr_t& a, const entity_addr_t& b) { return memcmp(&a, &b, sizeof(a)) == 0; }
+// inline bool operator!=(const entity_addr_t& a, const entity_addr_t& b) { return memcmp(&a, &b, sizeof(a)) != 0; }
+// inline bool operator<(const entity_addr_t& a, const entity_addr_t& b) { return memcmp(&a, &b, sizeof(a)) < 0; }
+// inline bool operator<=(const entity_addr_t& a, const entity_addr_t& b) { return memcmp(&a, &b, sizeof(a)) <= 0; }
+// inline bool operator>(const entity_addr_t& a, const entity_addr_t& b) { return memcmp(&a, &b, sizeof(a)) > 0; }
+// inline bool operator>=(const entity_addr_t& a, const entity_addr_t& b) { return memcmp(&a, &b, sizeof(a)) >= 0; }
+
+inline bool operator==(const entity_addr_t& a, const entity_addr_t& b) {
+  struct sockaddr_storage ssa = a.get_sockaddr_storage();
+  struct sockaddr_storage ssb = b.get_sockaddr_storage();
+
+  ssa.ss_family = htons(ssa.ss_family);
+  ssb.ss_family = htons(ssb.ss_family);
+
+  return memcmp(&ssa, &ssb, sizeof(struct sockaddr_storage)) == 0 && (a.type == b.type) && (a.nonce == b.nonce);
+}
+
+inline bool operator!=(const entity_addr_t& a, const entity_addr_t& b) {
+  struct sockaddr_storage ssa = a.get_sockaddr_storage();
+  struct sockaddr_storage ssb = b.get_sockaddr_storage();
+
+  ssa.ss_family = htons(ssa.ss_family);
+  ssb.ss_family = htons(ssb.ss_family);
+
+  return memcmp(&ssa, &ssb, sizeof(struct sockaddr_storage)) != 0 || (a.type != b.type) || (a.nonce != b.nonce);
+}
+
+inline bool operator<(const entity_addr_t& a, const entity_addr_t& b) {
+  struct sockaddr_storage ssa = a.get_sockaddr_storage();
+  struct sockaddr_storage ssb = b.get_sockaddr_storage();
+
+  ssa.ss_family = htons(ssa.ss_family);
+  ssb.ss_family = htons(ssb.ss_family);
+
+  return memcmp(&ssa, &ssb, sizeof(struct sockaddr_storage)) < 0 ||
+         (memcmp(&ssa, &ssb, sizeof(struct sockaddr_storage)) == 0 && (a.type < b.type ||
+         (a.type == b.type && (a.nonce < b.nonce))));
+}
+
+inline bool operator<=(const entity_addr_t& a, const entity_addr_t& b) {
+  struct sockaddr_storage ssa = a.get_sockaddr_storage();
+  struct sockaddr_storage ssb = b.get_sockaddr_storage();
+
+  ssa.ss_family = htons(ssa.ss_family);
+  ssb.ss_family = htons(ssb.ss_family);
+
+  return memcmp(&ssa, &ssb, sizeof(struct sockaddr_storage)) < 0 ||
+         (memcmp(&ssa, &ssb, sizeof(struct sockaddr_storage)) == 0 && (a.type < b.type ||
+         (a.type == b.type && (a.nonce <= b.nonce))));
+}
+
+inline bool operator>(const entity_addr_t& a, const entity_addr_t& b) {
+  struct sockaddr_storage ssa = a.get_sockaddr_storage();
+  struct sockaddr_storage ssb = b.get_sockaddr_storage();
+
+  ssa.ss_family = htons(ssa.ss_family);
+  ssb.ss_family = htons(ssb.ss_family);
+
+  return memcmp(&ssa, &ssb, sizeof(struct sockaddr_storage)) > 0 ||
+         (memcmp(&ssa, &ssb, sizeof(struct sockaddr_storage)) == 0 && (a.type > b.type ||
+         (a.type == b.type && (a.nonce > b.nonce))));
+}
+
+inline bool operator>=(const entity_addr_t& a, const entity_addr_t& b) {
+  struct sockaddr_storage ssa = a.get_sockaddr_storage();
+  struct sockaddr_storage ssb = b.get_sockaddr_storage();
+
+  ssa.ss_family = htons(ssa.ss_family);
+  ssb.ss_family = htons(ssb.ss_family);
+
+  return memcmp(&ssa, &ssb, sizeof(struct sockaddr_storage)) > 0 ||
+         (memcmp(&ssa, &ssb, sizeof(struct sockaddr_storage)) == 0 && (a.type > b.type ||
+         (a.type == b.type && (a.nonce >= b.nonce))));
+}
 
 namespace std {
 template<> struct hash<entity_addr_t> {
