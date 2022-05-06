@@ -746,6 +746,19 @@ def cluster(ctx, config):
             keyring_path,
         ],
     )
+    ctx.cluster.only(firstmon).run(
+        args=[
+            'sudo',
+            'adjust-ulimits',
+            'ceph-coverage',
+            coverage_dir,
+            'ceph',
+            'auth',
+            'import',
+            '-i',
+            keyring_path,
+        ],
+    )
     (mon0_remote,) = ctx.cluster.only(firstmon).remotes.keys()
     monmap_path = '{tdir}/{cluster}.monmap'.format(tdir=testdir,
                                                    cluster=cluster_name)
