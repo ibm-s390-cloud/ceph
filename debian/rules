@@ -37,9 +37,9 @@ ifneq (,$(filter parallel=%,$(DEB_BUILD_OPTIONS)))
 endif
 
 # s390x opts
-# extraopts += -DWITH_SPDK=OFF
-# extraopts += -DWITH_SYSTEM_PMDK=OFF
-# extraopts += -DWITH_RBD_RWL=OFF
+extraopts += -DWITH_SPDK=OFF
+extraopts += -DWITH_SYSTEM_PMDK=OFF
+extraopts += -DWITH_RBD_RWL=OFF
 extraopts += -DCMAKE_BUILD_TYPE=Release
 
 %:
