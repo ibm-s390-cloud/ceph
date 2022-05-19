@@ -40,11 +40,10 @@
     if(ll.is_ipv4()) \
       return ll.b != rr.b || ll.c != rr.c || ntohl(ll.d) != ntohl(rr.d) || ntohs(ll.e) != ntohs(rr.e); \
     else \
-      if(ll.a == AF_INET6) \
-        return ll.b != rr.b || ll.c != rr.c || \
-               ntohl(ll.f) != ntohl(rr.f) || ntohl(ll.g) != ntohl(rr.g) || ntohl(ll.h) != ntohl(rr.h) || \
-               ntohl(ll.i) != ntohl(rr.i) || ntohl(ll.j) != ntohl(rr.j) || ntohl(ll.k) != ntohl(rr.k) || \
-               ntohs(ll.l) != ntohs(rr.l); \
+      return ll.b != rr.b || ll.c != rr.c || \
+              ntohl(ll.f) != ntohl(rr.f) || ntohl(ll.g) != ntohl(rr.g) || ntohl(ll.h) != ntohl(rr.h) || \
+              ntohl(ll.i) != ntohl(rr.i) || ntohl(ll.j) != ntohl(rr.j) || ntohl(ll.k) != ntohl(rr.k) || \
+              ntohs(ll.l) != ntohs(rr.l); \
   }
 
 #define WRITE_CMP_OPERATORS_ENTITY_ADDR(type, a, b, c, d, e, f, g, h, i, j, k, l) \
@@ -379,18 +378,22 @@ struct entity_addr_t {
     }
   };
 
-  __u32 type;
-  __u32 nonce;
+  ceph_le32 type;
+  ceph_le32 nonce;
   union {
     sockaddr sa;
     sockaddr_in sin;
     sockaddr_in6 sin6;
   } u;
 
-  entity_addr_t() : type(0), nonce(0) {
+  entity_addr_t() {
+    type = 0;
+    nonce = 0;
     memset(&u, 0, sizeof(u));
   }
-  entity_addr_t(__u32 _type, __u32 _nonce) : type(_type), nonce(_nonce) {
+  entity_addr_t(__u32 _type, __u32 _nonce) {
+    type = _type;
+    nonce = _nonce;
     memset(&u, 0, sizeof(u));
   }
   explicit entity_addr_t(const ceph_entity_addr &o) {
