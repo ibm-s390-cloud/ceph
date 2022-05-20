@@ -31,6 +31,136 @@
 #define AF_INET6_LINUX 10
 #endif
 
+#define WRITE_EQ_OPERATORS_ENTITY_ADDR(type, a, b, c, d, e, f, g, h, i, j, k, l) \
+  inline bool operator==(const type &ll, const type &rr) { \
+    if(ll.is_ipv4()) \
+      return ll.b == rr.b && ll.c == rr.c && ntohl(ll.d) == ntohl(rr.d) && ntohs(ll.e) == ntohs(rr.e); \
+    else \
+      return ll.b == rr.b && ll.c == rr.c && \
+              ntohl(ll.f) == ntohl(rr.f) && ntohl(ll.g) == ntohl(rr.g) && ntohl(ll.h) == ntohl(rr.h) && \
+              ntohl(ll.i) == ntohl(rr.i) && ntohl(ll.j) == ntohl(rr.j) && ntohl(ll.k) == ntohl(rr.k) && \
+              ntohs(ll.l) == ntohs(rr.l); \
+  } \
+  inline bool operator!=(const type &ll, const type &rr) { \
+    if(ll.is_ipv4()) \
+      return ll.b != rr.b || ll.c != rr.c || ntohl(ll.d) != ntohl(rr.d) || ntohs(ll.e) != ntohs(rr.e); \
+    else \
+      return ll.b != rr.b || ll.c != rr.c || \
+              ntohl(ll.f) != ntohl(rr.f) || ntohl(ll.g) != ntohl(rr.g) || ntohl(ll.h) != ntohl(rr.h) || \
+              ntohl(ll.i) != ntohl(rr.i) || ntohl(ll.j) != ntohl(rr.j) || ntohl(ll.k) != ntohl(rr.k) || \
+              ntohs(ll.l) != ntohs(rr.l); \
+  }
+
+#define WRITE_CMP_OPERATORS_ENTITY_ADDR(type, a, b, c, d, e, f, g, h, i, j, k, l) \
+  inline bool operator<=(const type &ll, const type &rr) { \
+    if(ll.is_ipv4()) { \
+      uint32_t lld = ntohl(ll.d); uint32_t rrd = ntohl(rr.d); \
+      uint16_t lle = ntohs(ll.e); uint16_t rre = ntohs(rr.e); \
+      return ll.b < rr.b || \
+        (ll.b == rr.b && (ll.c < rr.c || \
+          (ll.c == rr.c && (lld < rrd || \
+            (lld == rrd && lle <= rre))))); \
+    } else { \
+      uint32_t llf = ntohl(ll.f); uint32_t rrf = ntohl(rr.f); \
+      uint32_t llg = ntohl(ll.g); uint32_t rrg = ntohl(rr.g); \
+      uint32_t llh = ntohl(ll.h); uint32_t rrh = ntohl(rr.h); \
+      uint32_t lli = ntohl(ll.i); uint32_t rri = ntohl(rr.i); \
+      uint32_t llj = ntohl(ll.j); uint32_t rrj = ntohl(rr.j); \
+      uint32_t llk = ntohl(ll.k); uint32_t rrk = ntohl(rr.k); \
+      uint16_t lll = ntohs(ll.l); uint16_t rrl = ntohs(rr.l); \
+      return ll.b < rr.b || \
+        (ll.b == rr.b && (ll.c < rr.c || \
+          (ll.c == rr.c && (llf < rrf || \
+            (llf == rrf && (llg < rrg || \
+              (llg == rrg && (llh < rrh || \
+                (llh == rrh && (lli < rri || \
+                  (lli == rri && (llj < rrj || \
+                    (llj == rrj && (llk < rrk || \
+                      (llk == rrk && lll <= rrl))))))))))))))); \
+    } \
+  } \
+  inline bool operator>=(const type &ll, const type &rr) { \
+    if(ll.is_ipv4()) { \
+      uint32_t lld = ntohl(ll.d); uint32_t rrd = ntohl(rr.d); \
+      uint16_t lle = ntohs(ll.e); uint16_t rre = ntohs(rr.e); \
+      return ll.b > rr.b || \
+        (ll.b == rr.b && (ll.c > rr.c || \
+          (ll.c == rr.c && (lld > rrd || \
+            (lld == rrd && lle >= rre))))); \
+    } else { \
+      uint32_t llf = ntohl(ll.f); uint32_t rrf = ntohl(rr.f); \
+      uint32_t llg = ntohl(ll.g); uint32_t rrg = ntohl(rr.g); \
+      uint32_t llh = ntohl(ll.h); uint32_t rrh = ntohl(rr.h); \
+      uint32_t lli = ntohl(ll.i); uint32_t rri = ntohl(rr.i); \
+      uint32_t llj = ntohl(ll.j); uint32_t rrj = ntohl(rr.j); \
+      uint32_t llk = ntohl(ll.k); uint32_t rrk = ntohl(rr.k); \
+      uint16_t lll = ntohs(ll.l); uint16_t rrl = ntohs(rr.l); \
+      return ll.b > rr.b || \
+        (ll.b == rr.b && (ll.c > rr.c || \
+          (ll.c == rr.c && (llf > rrf || \
+            (llf == rrf && (llg > rrg || \
+              (llg == rrg && (llh > rrh || \
+                (llh == rrh && (lli > rri || \
+                  (lli == rri && (llj > rrj || \
+                    (llj == rrj && (llk > rrk || \
+                      (llk == rrk && lll >= rrl))))))))))))))); \
+    } \
+  } \
+  inline bool operator<(const type &ll, const type &rr) { \
+    if(ll.is_ipv4()) { \
+      uint32_t lld = ntohl(ll.d); uint32_t rrd = ntohl(rr.d); \
+      uint16_t lle = ntohs(ll.e); uint16_t rre = ntohs(rr.e); \
+      return ll.b < rr.b || \
+        (ll.b == rr.b && (ll.c < rr.c || \
+          (ll.c == rr.c && (lld < rrd || \
+            (lld == rrd && lle < rre))))); \
+    } else { \
+      uint32_t llf = ntohl(ll.f); uint32_t rrf = ntohl(rr.f); \
+      uint32_t llg = ntohl(ll.g); uint32_t rrg = ntohl(rr.g); \
+      uint32_t llh = ntohl(ll.h); uint32_t rrh = ntohl(rr.h); \
+      uint32_t lli = ntohl(ll.i); uint32_t rri = ntohl(rr.i); \
+      uint32_t llj = ntohl(ll.j); uint32_t rrj = ntohl(rr.j); \
+      uint32_t llk = ntohl(ll.k); uint32_t rrk = ntohl(rr.k); \
+      uint16_t lll = ntohs(ll.l); uint16_t rrl = ntohs(rr.l); \
+      return ll.b < rr.b || \
+        (ll.b == rr.b && (ll.c < rr.c || \
+          (ll.c == rr.c && (llf < rrf || \
+            (llf == rrf && (llg < rrg || \
+              (llg == rrg && (llh < rrh || \
+                (llh == rrh && (lli < rri || \
+                  (lli == rri && (llj < rrj || \
+                    (llj == rrj && (llk < rrk || \
+                      (llk == rrk && lll < rrl))))))))))))))); \
+    } \
+  } \
+  inline bool operator>(const type &ll, const type &rr) { \
+    if(ll.is_ipv4()) { \
+      uint32_t lld = ntohl(ll.d); uint32_t rrd = ntohl(rr.d); \
+      uint16_t lle = ntohs(ll.e); uint16_t rre = ntohs(rr.e); \
+      return ll.b > rr.b || \
+        (ll.b == rr.b && (ll.c > rr.c || \
+          (ll.c == rr.c && (lld > rrd || \
+            (lld == rrd && lle > rre))))); \
+    } else { \
+      uint32_t llf = ntohl(ll.f); uint32_t rrf = ntohl(rr.f); \
+      uint32_t llg = ntohl(ll.g); uint32_t rrg = ntohl(rr.g); \
+      uint32_t llh = ntohl(ll.h); uint32_t rrh = ntohl(rr.h); \
+      uint32_t lli = ntohl(ll.i); uint32_t rri = ntohl(rr.i); \
+      uint32_t llj = ntohl(ll.j); uint32_t rrj = ntohl(rr.j); \
+      uint32_t llk = ntohl(ll.k); uint32_t rrk = ntohl(rr.k); \
+      uint16_t lll = ntohs(ll.l); uint16_t rrl = ntohs(rr.l); \
+      return ll.b > rr.b || \
+        (ll.b == rr.b && (ll.c > rr.c || \
+          (ll.c == rr.c && (llf > rrf || \
+            (llf == rrf && (llg > rrg || \
+              (llg == rrg && (llh > rrh || \
+                (llh == rrh && (lli > rri || \
+                  (lli == rri && (llj > rrj || \
+                    (llj == rrj && (llk > rrk || \
+                      (llk == rrk && lll > rrl))))))))))))))); \
+    } \
+  }
+
 namespace ceph {
   class Formatter;
 }
@@ -237,18 +367,22 @@ struct entity_addr_t {
     }
   };
 
-  __u32 type;
-  __u32 nonce;
+  ceph_le32 type;
+  ceph_le32 nonce;
   union {
     sockaddr sa;
     sockaddr_in sin;
     sockaddr_in6 sin6;
   } u;
 
-  entity_addr_t() : type(0), nonce(0) {
+  entity_addr_t() {
+    type = 0;
+    nonce = 0;
     memset(&u, 0, sizeof(u));
   }
-  entity_addr_t(__u32 _type, __u32 _nonce) : type(_type), nonce(_nonce) {
+  entity_addr_t(__u32 _type, __u32 _nonce) {
+    type = _type;
+    nonce = _nonce;
     memset(&u, 0, sizeof(u));
   }
   explicit entity_addr_t(const ceph_entity_addr &o) {
@@ -541,12 +675,21 @@ WRITE_CLASS_ENCODER_FEATURES(entity_addr_t)
 
 std::ostream& operator<<(std::ostream& out, const entity_addr_t &addr);
 
-inline bool operator==(const entity_addr_t& a, const entity_addr_t& b) { return memcmp(&a, &b, sizeof(a)) == 0; }
-inline bool operator!=(const entity_addr_t& a, const entity_addr_t& b) { return memcmp(&a, &b, sizeof(a)) != 0; }
-inline bool operator<(const entity_addr_t& a, const entity_addr_t& b) { return memcmp(&a, &b, sizeof(a)) < 0; }
-inline bool operator<=(const entity_addr_t& a, const entity_addr_t& b) { return memcmp(&a, &b, sizeof(a)) <= 0; }
-inline bool operator>(const entity_addr_t& a, const entity_addr_t& b) { return memcmp(&a, &b, sizeof(a)) > 0; }
-inline bool operator>=(const entity_addr_t& a, const entity_addr_t& b) { return memcmp(&a, &b, sizeof(a)) >= 0; }
+WRITE_EQ_OPERATORS_ENTITY_ADDR(entity_addr_t, u.sa.sa_family, \
+                               type, nonce, \
+                               u.sin.sin_addr.s_addr, u.sin.sin_port, \
+                               u.sin6.sin6_flowinfo, u.sin6.sin6_scope_id, \
+                               u.sin6.sin6_addr.s6_addr32[0], u.sin6.sin6_addr.s6_addr32[1], \
+                               u.sin6.sin6_addr.s6_addr32[2], u.sin6.sin6_addr.s6_addr32[3], \
+                               u.sin6.sin6_port)
+
+WRITE_CMP_OPERATORS_ENTITY_ADDR(entity_addr_t, u.sa.sa_family, \
+                                type, nonce, \
+                                u.sin.sin_addr.s_addr, u.sin.sin_port, \
+                                u.sin6.sin6_flowinfo, u.sin6.sin6_scope_id, \
+                                u.sin6.sin6_addr.s6_addr32[0], u.sin6.sin6_addr.s6_addr32[1], \
+                                u.sin6.sin6_addr.s6_addr32[2], u.sin6.sin6_addr.s6_addr32[3], \
+                                u.sin6.sin6_port)
 
 namespace std {
 template<> struct hash<entity_addr_t> {
