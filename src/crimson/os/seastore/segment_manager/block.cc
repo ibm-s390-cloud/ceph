@@ -6,6 +6,8 @@
 
 #include <fmt/format.h>
 
+#include <seastar/core/metrics.hh>
+
 #include "include/buffer.h"
 
 #include "crimson/common/config_proxy.h"
@@ -194,7 +196,7 @@ SegmentStateTracker::read_in(
 static
 block_sm_superblock_t make_superblock(
   device_id_t device_id,
-  segment_manager_config_t sm_config,
+  device_config_t sm_config,
   const seastar::stat_data &data)
 {
   LOG_PREFIX(block_make_superblock);
@@ -232,12 +234,7 @@ block_sm_superblock_t make_superblock(
     segments,
     tracker_off,
     first_seg_off,
-    sm_config.major_dev,
-    sm_config.magic,
-    sm_config.dtype,
-    sm_config.device_id,
-    sm_config.meta,
-    std::move(sm_config.secondary_devices)
+    std::move(sm_config)
   };
 }
 
@@ -484,7 +481,7 @@ BlockSegmentManager::mount_ret BlockSegmentManager::mount()
     auto sd = p.second;
     return read_superblock(device, sd);
   }).safe_then([=](auto sb) {
-    set_device_id(sb.device_id);
+    set_device_id(sb.config.spec.id);
     INFO("D{} read {}", get_device_id(), sb);
     sb.validate();
     superblock = sb;
@@ -515,10 +512,10 @@ BlockSegmentManager::mount_ret BlockSegmentManager::mount()
 }
 
 BlockSegmentManager::mkfs_ret BlockSegmentManager::mkfs(
-  segment_manager_config_t sm_config)
+  device_config_t sm_config)
 {
   LOG_PREFIX(BlockSegmentManager::mkfs);
-  set_device_id(sm_config.device_id);
+  set_device_id(sm_config.spec.id);
   INFO("D{} path={}, {}", get_device_id(), device_path, sm_config);
   return seastar::do_with(
     seastar::file{},
@@ -687,9 +684,8 @@ void BlockSegmentManager::register_metrics()
   LOG_PREFIX(BlockSegmentManager::register_metrics);
   DEBUG("D{}", get_device_id());
   namespace sm = seastar::metrics;
-  sm::label label("device_id");
   std::vector<sm::label_instance> label_instances;
-  label_instances.push_back(label(get_device_id()));
+  label_instances.push_back(sm::label_instance("device_id", get_device_id()));
   stats.reset();
   metrics.add_group(
     "segment_manager",

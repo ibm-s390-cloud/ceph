@@ -566,13 +566,17 @@ void RGWDataChangesLog::register_renew(const rgw_bucket_shard& bs)
 void RGWDataChangesLog::update_renewed(const rgw_bucket_shard& bs,
 				       real_time expiration)
 {
-  std::scoped_lock l{lock};
+  std::unique_lock l{lock};
   ChangeStatusPtr status;
   _get_change(bs, status);
+  l.unlock();
+
 
   ldout(cct, 20) << "RGWDataChangesLog::update_renewd() bucket_name="
 		 << bs.bucket.name << " shard_id=" << bs.shard_id
 		 << " expiration=" << expiration << dendl;
+
+  std::unique_lock sl(status->lock);
   status->cur_expiration = expiration;
 }
 
@@ -599,6 +603,10 @@ std::string RGWDataChangesLog::get_oid(uint64_t gen_id, int i) const {
 }
 
 int RGWDataChangesLog::add_entry(const DoutPrefixProvider *dpp, const RGWBucketInfo& bucket_info, int shard_id) {
+  if (!zone->log_data) {
+    return 0;
+  }
+
   auto& bucket = bucket_info.bucket;
 
   if (!filter_bucket(dpp, bucket, null_yield)) {

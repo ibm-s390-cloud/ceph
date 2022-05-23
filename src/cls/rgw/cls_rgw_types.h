@@ -15,11 +15,12 @@
 
 #include "rgw/rgw_basic_types.h"
 
-#define CEPH_RGW_REMOVE 'r'
-#define CEPH_RGW_UPDATE 'u'
-#define CEPH_RGW_TAG_TIMEOUT 120
+#define CEPH_RGW_REMOVE 'r' // value 114
+#define CEPH_RGW_UPDATE 'u' // value 117
 #define CEPH_RGW_DIR_SUGGEST_LOG_OP  0x80
 #define CEPH_RGW_DIR_SUGGEST_OP_MASK 0x7f
+
+constexpr uint64_t CEPH_RGW_DEFAULT_TAG_TIMEOUT = 120; // in seconds
 
 class JSONObj;
 
@@ -567,7 +568,7 @@ struct rgw_cls_bi_entry {
 
   void dump(ceph::Formatter *f) const;
   void decode_json(JSONObj *obj, cls_rgw_obj_key *effective_key = NULL);
-
+  static void generate_test_instances(std::list<rgw_cls_bi_entry*>& o);
   bool get_info(cls_rgw_obj_key *key, RGWObjCategory *category,
 		rgw_bucket_category_stats *accounted_stats);
 };
@@ -651,6 +652,7 @@ struct rgw_bucket_olh_entry {
   }
   void dump(ceph::Formatter *f) const;
   void decode_json(JSONObj *obj);
+  static void generate_test_instances(std::list<rgw_bucket_olh_entry*>& o);
 };
 WRITE_CLASS_ENCODER(rgw_bucket_olh_entry)
 
@@ -957,6 +959,8 @@ struct rgw_usage_data {
     ops += usage.ops;
     successful_ops += usage.successful_ops;
   }
+  void dump(ceph::Formatter *f) const;
+  static void generate_test_instances(std::list<rgw_usage_data*>& o);
 };
 WRITE_CLASS_ENCODER(rgw_usage_data)
 
@@ -1063,6 +1067,8 @@ struct rgw_usage_log_info {
     decode(entries, bl);
     DECODE_FINISH(bl);
   }
+  void dump(ceph::Formatter* f) const;
+  static void generate_test_instances(std::list<rgw_usage_log_info*>& o);
 
   rgw_usage_log_info() {}
 };
@@ -1098,6 +1104,8 @@ struct rgw_user_bucket {
 
     return false;
   }
+  void dump(ceph::Formatter* f) const;
+  static void generate_test_instances(std::list<rgw_user_bucket*>& o);
 };
 WRITE_CLASS_ENCODER(rgw_user_bucket)
 
@@ -1239,23 +1247,31 @@ struct cls_rgw_lc_obj_head
 {
   time_t start_date = 0;
   std::string marker;
+  time_t shard_rollover_date = 0;
 
   cls_rgw_lc_obj_head() {}
 
   void encode(ceph::buffer::list& bl) const {
-    ENCODE_START(1, 1, bl);
+    ENCODE_START(2, 2, bl);
     uint64_t t = start_date;
     encode(t, bl);
     encode(marker, bl);
+    encode(shard_rollover_date, bl);
     ENCODE_FINISH(bl);
   }
 
   void decode(ceph::buffer::list::const_iterator& bl) {
-    DECODE_START(1, bl);
+    DECODE_START(2, bl);
     uint64_t t;
     decode(t, bl);
     start_date = static_cast<time_t>(t);
     decode(marker, bl);
+    if (struct_v < 2) {
+      shard_rollover_date = 0;
+    } else {
+      decode(t, bl);
+      shard_rollover_date = static_cast<time_t>(t);
+    }
     DECODE_FINISH(bl);
   }
 
@@ -1293,7 +1309,7 @@ struct cls_rgw_lc_entry {
     DECODE_FINISH(bl);
   }
   void dump(Formatter *f) const;
-  void generate_test_instances(std::list<cls_rgw_lc_entry*>& ls);
+  static void generate_test_instances(std::list<cls_rgw_lc_entry*>& ls);
 };
 WRITE_CLASS_ENCODER(cls_rgw_lc_entry);
 

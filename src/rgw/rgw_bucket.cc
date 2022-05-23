@@ -55,7 +55,8 @@
 #define dout_context g_ceph_context
 #define dout_subsys ceph_subsys_rgw
 
-#define BUCKET_TAG_TIMEOUT 30
+// seconds for timeout during RGWBucket::check_object_index
+constexpr uint64_t BUCKET_TAG_QUICK_TIMEOUT = 30;
 
 using namespace std;
 
@@ -156,37 +157,6 @@ void rgw_parse_url_bucket(const string &bucket, const string& auth_tenant,
     tenant_name = auth_tenant;
     bucket_name = bucket;
   }
-}
-
-int rgw_bucket_parse_bucket_instance(const string& bucket_instance, string *bucket_name, string *bucket_id, int *shard_id)
-{
-  auto pos = bucket_instance.rfind(':');
-  if (pos == string::npos) {
-    return -EINVAL;
-  }
-
-  string first = bucket_instance.substr(0, pos);
-  string second = bucket_instance.substr(pos + 1);
-
-  pos = first.find(':');
-
-  if (pos == string::npos) {
-    *shard_id = -1;
-    *bucket_name = first;
-    *bucket_id = second;
-    return 0;
-  }
-
-  *bucket_name = first.substr(0, pos);
-  *bucket_id = first.substr(pos + 1);
-
-  string err;
-  *shard_id = strict_strtol(second.c_str(), 10, &err);
-  if (!err.empty()) {
-    return -EINVAL;
-  }
-
-  return 0;
 }
 
 // parse key in format: [tenant/]name:instance[:shard_id]
@@ -315,15 +285,13 @@ bool rgw_bucket_object_check_filter(const std::string& oid)
 
 int rgw_remove_object(const DoutPrefixProvider *dpp, rgw::sal::Store* store, rgw::sal::Bucket* bucket, rgw_obj_key& key)
 {
-  RGWObjectCtx rctx(store);
-
   if (key.instance.empty()) {
     key.instance = "null";
   }
 
   std::unique_ptr<rgw::sal::Object> object = bucket->get_object(key);
 
-  return object->delete_object(dpp, &rctx, null_yield);
+  return object->delete_object(dpp, null_yield);
 }
 
 static void set_err_msg(std::string *sink, std::string msg)
@@ -493,22 +461,21 @@ static void dump_index_check(map<RGWObjCategory, RGWStorageStats> existing_stats
 }
 
 int RGWBucket::check_bad_index_multipart(RGWBucketAdminOpState& op_state,
-               RGWFormatterFlusher& flusher,
-               const DoutPrefixProvider *dpp, std::string *err_msg)
+					 RGWFormatterFlusher& flusher,
+					 const DoutPrefixProvider *dpp,
+					 std::string *err_msg)
 {
-  bool fix_index = op_state.will_fix_index();
-
-  bool is_truncated;
-  map<string, bool> meta_objs;
-  map<rgw_obj_index_key, string> all_objs;
+  const bool fix_index = op_state.will_fix_index();
 
   bucket = op_state.get_bucket()->clone();
 
   rgw::sal::Bucket::ListParams params;
-
   params.list_versions = true;
   params.ns = RGW_OBJ_NS_MULTIPART;
 
+  std::map<std::string, bool> meta_objs;
+  std::map<rgw_obj_index_key, std::string> all_objs;
+  bool is_truncated;
   do {
     rgw::sal::Bucket::ListResults results;
     int r = bucket->list(dpp, params, listing_max_entries, results, null_yield);
@@ -520,11 +487,10 @@ int RGWBucket::check_bad_index_multipart(RGWBucketAdminOpState& op_state,
     }
     is_truncated = results.is_truncated;
 
-    vector<rgw_bucket_dir_entry>::iterator iter;
-    for (iter = results.objs.begin(); iter != results.objs.end(); ++iter) {
-      rgw_obj_index_key key = iter->key;
+    for (const auto& o : results.objs) {
+      rgw_obj_index_key key = o.key;
       rgw_obj obj(bucket->get_key(), key);
-      string oid = obj.get_oid();
+      std::string oid = obj.get_oid();
 
       int pos = oid.find_last_of('.');
       if (pos < 0) {
@@ -532,8 +498,8 @@ int RGWBucket::check_bad_index_multipart(RGWBucketAdminOpState& op_state,
         all_objs[key] = oid;
       } else {
         /* obj has suffix */
-        string name = oid.substr(0, pos);
-        string suffix = oid.substr(pos + 1);
+	std::string name = oid.substr(0, pos);
+	std::string suffix = oid.substr(pos + 1);
 
         if (suffix.compare("meta") == 0) {
           meta_objs[name] = true;
@@ -544,20 +510,20 @@ int RGWBucket::check_bad_index_multipart(RGWBucketAdminOpState& op_state,
     }
   } while (is_truncated);
 
-  list<rgw_obj_index_key> objs_to_unlink;
+  std::list<rgw_obj_index_key> objs_to_unlink;
   Formatter *f =  flusher.get_formatter();
 
   f->open_array_section("invalid_multipart_entries");
 
-  for (auto aiter = all_objs.begin(); aiter != all_objs.end(); ++aiter) {
-    string& name = aiter->second;
-
+  for (const auto& o : all_objs) {
+    const std::string& name = o.second;
     if (meta_objs.find(name) == meta_objs.end()) {
-      objs_to_unlink.push_back(aiter->first);
+      objs_to_unlink.push_back(o.first);
     }
 
     if (objs_to_unlink.size() > listing_max_entries) {
       if (fix_index) {
+	// note: under rados this removes directly from rados index objects
 	int r = bucket->remove_objs_from_index(dpp, objs_to_unlink);
 	if (r < 0) {
 	  set_err_msg(err_msg, "ERROR: remove_obj_from_index() returned error: " +
@@ -566,13 +532,14 @@ int RGWBucket::check_bad_index_multipart(RGWBucketAdminOpState& op_state,
 	}
       }
 
-      dump_mulipart_index_results(objs_to_unlink, flusher.get_formatter());
+      dump_mulipart_index_results(objs_to_unlink, f);
       flusher.flush();
       objs_to_unlink.clear();
     }
   }
 
   if (fix_index) {
+    // note: under rados this removes directly from rados index objects
     int r = bucket->remove_objs_from_index(dpp, objs_to_unlink);
     if (r < 0) {
       set_err_msg(err_msg, "ERROR: remove_obj_from_index() returned error: " +
@@ -603,7 +570,8 @@ int RGWBucket::check_object_index(const DoutPrefixProvider *dpp,
     return -EINVAL;
   }
 
-  bucket->set_tag_timeout(dpp, BUCKET_TAG_TIMEOUT);
+  // use a quicker/shorter tag timeout during this process
+  bucket->set_tag_timeout(dpp, BUCKET_TAG_QUICK_TIMEOUT);
 
   rgw::sal::Bucket::ListResults results;
   results.is_truncated = true;
@@ -629,6 +597,7 @@ int RGWBucket::check_object_index(const DoutPrefixProvider *dpp,
 
   formatter->close_section();
 
+  // restore normal tag timeout for bucket
   bucket->set_tag_timeout(dpp, 0);
 
   return 0;
@@ -723,8 +692,7 @@ int rgw_object_get_attr(const DoutPrefixProvider *dpp,
 			rgw::sal::Store* store, rgw::sal::Object* obj,
 			const char* attr_name, bufferlist& out_bl, optional_yield y)
 {
-  RGWObjectCtx obj_ctx(store);
-  std::unique_ptr<rgw::sal::Object::ReadOp> rop = obj->get_read_op(&obj_ctx);
+  std::unique_ptr<rgw::sal::Object::ReadOp> rop = obj->get_read_op();
 
   return rop->get_attr(dpp, attr_name, out_bl, y);
 }
@@ -2922,7 +2890,7 @@ int RGWBucketCtl::chown(rgw::sal::Store* store, rgw::sal::Bucket* bucket,
     for (const auto& obj : results.objs) {
       std::unique_ptr<rgw::sal::Object> r_obj = bucket->get_object(obj.key);
 
-      ret = r_obj->get_obj_attrs(&obj_ctx, y, dpp);
+      ret = r_obj->get_obj_attrs(y, dpp);
       if (ret < 0){
         ldpp_dout(dpp, 0) << "ERROR: failed to read object " << obj.key.name << cpp_strerror(-ret) << dendl;
         continue;
@@ -2963,10 +2931,10 @@ int RGWBucketCtl::chown(rgw::sal::Store* store, rgw::sal::Bucket* bucket,
         bl.clear();
         encode(policy, bl);
 
-	r_obj->set_atomic(&obj_ctx);
+	r_obj->set_atomic();
 	map<string, bufferlist> attrs;
 	attrs[RGW_ATTR_ACL] = bl;
-	ret = r_obj->set_obj_attrs(dpp, &obj_ctx, &attrs, nullptr, y);
+	ret = r_obj->set_obj_attrs(dpp, &attrs, nullptr, y);
         if (ret < 0) {
           ldpp_dout(dpp, 0) << "ERROR: modify attr failed " << cpp_strerror(-ret) << dendl;
           return ret;

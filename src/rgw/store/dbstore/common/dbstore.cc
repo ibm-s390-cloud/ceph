@@ -65,8 +65,10 @@ int DB::createGC(const DoutPrefixProvider *dpp) {
 }
 
 int DB::stopGC() {
-  if (gc_worker)
+  if (gc_worker) {
+    gc_worker->signal_stop();
     gc_worker->join();
+  }
   return 0;
 }
 
@@ -89,7 +91,8 @@ int DB::Destroy(const DoutPrefixProvider *dpp)
 }
 
 
-DBOp *DB::getDBOp(const DoutPrefixProvider *dpp, string Op, struct DBOpParams *params)
+DBOp *DB::getDBOp(const DoutPrefixProvider *dpp, std::string_view Op,
+                  const DBOpParams *params)
 {
   if (!Op.compare("InsertUser"))
     return dbops.InsertUser;
@@ -217,7 +220,7 @@ int DB::objectmapDelete(const DoutPrefixProvider *dpp, string bucket)
   return 0;
 }
 
-int DB::InitializeParams(const DoutPrefixProvider *dpp, string Op, DBOpParams *params)
+int DB::InitializeParams(const DoutPrefixProvider *dpp, DBOpParams *params)
 {
   int ret = -1;
 
@@ -238,7 +241,7 @@ out:
   return ret;
 }
 
-int DB::ProcessOp(const DoutPrefixProvider *dpp, string Op, struct DBOpParams *params) {
+int DB::ProcessOp(const DoutPrefixProvider *dpp, std::string_view Op, DBOpParams *params) {
   int ret = -1;
   class DBOp *db_op;
 
@@ -251,11 +254,9 @@ int DB::ProcessOp(const DoutPrefixProvider *dpp, string Op, struct DBOpParams *p
   ret = db_op->Execute(dpp, params);
 
   if (ret) {
-    ldpp_dout(dpp, 0)<<"In Process op Execute failed for fop(" \
-      <<Op.c_str()<<") " << dendl;
+    ldpp_dout(dpp, 0)<<"In Process op Execute failed for fop(" << Op << ")" << dendl;
   } else {
-    ldpp_dout(dpp, 20)<<"Successfully processed fop(" \
-      <<Op.c_str()<<") " << dendl;
+    ldpp_dout(dpp, 20)<<"Successfully processed fop(" << Op << ")" << dendl;
   }
 
   return ret;
@@ -267,14 +268,13 @@ int DB::get_user(const DoutPrefixProvider *dpp,
     RGWObjVersionTracker *pobjv_tracker) {
   int ret = 0;
 
-  if (query_str.empty()) {
-    // not checking for query_str_val as the query can be to fetch
-    // entries with null values
+  if (query_str.empty() || query_str_val.empty()) {
+    ldpp_dout(dpp, 0)<<"In GetUser - Invalid query(" << query_str <<"), query_str_val(" << query_str_val <<")" << dendl;
     return -1;
   }
 
   DBOpParams params = {};
-  InitializeParams(dpp, "GetUser", &params);
+  InitializeParams(dpp, &params);
 
   params.op.query_str = query_str;
 
@@ -301,7 +301,8 @@ int DB::get_user(const DoutPrefixProvider *dpp,
     goto out;
 
   /* Verify if its a valid user */
-  if (params.op.user.uinfo.access_keys.empty()) {
+  if (params.op.user.uinfo.access_keys.empty() ||
+        params.op.user.uinfo.user_id.id.empty()) {
     ldpp_dout(dpp, 0)<<"In GetUser - No user with query(" <<query_str.c_str()<<"), user_id(" << uinfo.user_id <<") found" << dendl;
     return -ENOENT;
   }
@@ -325,7 +326,7 @@ int DB::store_user(const DoutPrefixProvider *dpp,
     RGWObjVersionTracker *pobjv, RGWUserInfo* pold_info)
 {
   DBOpParams params = {};
-  InitializeParams(dpp, "CreateUser", &params);
+  InitializeParams(dpp, &params);
   int ret = 0;
 
   /* Check if the user already exists and return the old info, caller will have a use for it */
@@ -334,7 +335,7 @@ int DB::store_user(const DoutPrefixProvider *dpp,
   obj_version& obj_ver = objv_tracker.read_version;
 
   orig_info.user_id = uinfo.user_id;
-  ret = get_user(dpp, string("user_id"), "", orig_info, nullptr, &objv_tracker);
+  ret = get_user(dpp, string("user_id"), uinfo.user_id.id, orig_info, nullptr, &objv_tracker);
 
   if (!ret && obj_ver.ver) {
     /* already exists. */
@@ -373,6 +374,7 @@ int DB::store_user(const DoutPrefixProvider *dpp,
     ldpp_dout(dpp, 0)<<"store_user failed with err:(" <<ret<<") " << dendl;
     goto out;
   }
+  ldpp_dout(dpp, 20)<<"User creation successful - userid:(" <<uinfo.user_id<<") " << dendl;
 
   if (pobjv) {
     pobjv->read_version = obj_ver;
@@ -387,14 +389,18 @@ int DB::remove_user(const DoutPrefixProvider *dpp,
     RGWUserInfo& uinfo, RGWObjVersionTracker *pobjv)
 {
   DBOpParams params = {};
-  InitializeParams(dpp, "RemoveUser", &params);
+  InitializeParams(dpp, &params);
   int ret = 0;
 
   RGWUserInfo orig_info;
   RGWObjVersionTracker objv_tracker = {};
 
   orig_info.user_id = uinfo.user_id;
-  ret = get_user(dpp, string("user_id"), "", orig_info, nullptr, &objv_tracker);
+  ret = get_user(dpp, string("user_id"), uinfo.user_id.id, orig_info, nullptr, &objv_tracker);
+
+  if (ret) {
+    return ret;
+  }
 
   if (!ret && objv_tracker.read_version.ver) {
     /* already exists. */
@@ -435,7 +441,7 @@ int DB::get_bucket_info(const DoutPrefixProvider *dpp, const std::string& query_
 
   DBOpParams params = {};
   DBOpParams params2 = {};
-  InitializeParams(dpp, "GetBucket", &params);
+  InitializeParams(dpp, &params);
 
   if (query_str == "name") {
     params.op.bucket.info.bucket.name = info.bucket.name;
@@ -496,7 +502,7 @@ int DB::create_bucket(const DoutPrefixProvider *dpp,
    */
 
   DBOpParams params = {};
-  InitializeParams(dpp, "CreateBucket", &params);
+  InitializeParams(dpp, &params);
   int ret = 0;
 
   /* Check if the bucket already exists and return the old info, caller will have a use for it */
@@ -564,7 +570,7 @@ int DB::remove_bucket(const DoutPrefixProvider *dpp, const RGWBucketInfo info) {
   int ret = 0;
 
   DBOpParams params = {};
-  InitializeParams(dpp, "RemoveBucket", &params);
+  InitializeParams(dpp, &params);
 
   params.op.bucket.info.bucket.name = info.bucket.name;
 
@@ -591,7 +597,7 @@ int DB::list_buckets(const DoutPrefixProvider *dpp, const std::string& query_str
   int ret = 0;
 
   DBOpParams params = {};
-  InitializeParams(dpp, "ListUserBuckets", &params);
+  InitializeParams(dpp, &params);
 
   params.op.user.uinfo.user_id = user;
   params.op.bucket.min_marker = marker;
@@ -672,7 +678,7 @@ int DB::update_bucket(const DoutPrefixProvider *dpp, const std::string& query_st
     pobjv = &info.objv_tracker;
   }
 
-  InitializeParams(dpp, "UpdateBucket", &params);
+  InitializeParams(dpp, &params);
 
   params.op.bucket.info.bucket.name = info.bucket.name;
 
@@ -724,20 +730,39 @@ out:
   return ret;
 }
 
+/**
+ * Get ordered listing of the objects in a bucket.
+ *
+ * max_p: maximum number of results to return
+ * bucket: bucket to list contents of
+ * prefix: only return results that match this prefix
+ * delim: do not include results that match this string.
+ *     Any skipped results will have the matching portion of their name
+ *     inserted in common_prefixes with a "true" mark.
+ * marker: if filled in, begin the listing with this object.
+ * end_marker: if filled in, end the listing with this object.
+ * result: the objects are put in here.
+ * common_prefixes: if delim is filled in, any matching prefixes are
+ * placed here.
+ * is_truncated: if number of objects in the bucket is bigger than
+ * max, then truncated.
+ */
 int DB::Bucket::List::list_objects(const DoutPrefixProvider *dpp, int64_t max,
 		           vector<rgw_bucket_dir_entry> *result,
 		           map<string, bool> *common_prefixes, bool *is_truncated)
 {
   int ret = 0;
   DB *store = target->get_store();
+  int64_t count = 0;
 
   DBOpParams db_params = {};
-  store->InitializeParams(dpp, "ListBucketObjects", &db_params);
+  store->InitializeParams(dpp, &db_params);
 
   db_params.op.bucket.info = target->get_bucket_info(); 
   /* XXX: Handle whole marker? key -> name, instance, ns? */
   db_params.op.obj.min_marker = params.marker.name;
   db_params.op.obj.max_marker = params.end_marker.name;
+  db_params.op.obj.prefix = params.prefix + "%";
   db_params.op.list_max_count = max + 1; /* +1 for next_marker */
 
   ret = store->ProcessOp(dpp, "ListBucketObjects", &db_params);
@@ -747,19 +772,39 @@ int DB::Bucket::List::list_objects(const DoutPrefixProvider *dpp, int64_t max,
     goto out;
   }
 
-  if (db_params.op.obj.list_entries.size() >= (uint64_t)max) {
-    *is_truncated = true;
-    next_marker.name = db_params.op.obj.list_entries.back().key.name;
-    next_marker.instance = db_params.op.obj.list_entries.back().key.instance;
-    db_params.op.obj.list_entries.pop_back();
-  }
 
   for (auto& entry : db_params.op.obj.list_entries) {
+    if (count >= max) {
+      *is_truncated = true;
+      next_marker.name = entry.key.name;
+      next_marker.instance = entry.key.instance;
+      break;
+    }
+    if (!params.delim.empty()) {
+    const std::string& objname = entry.key.name;
+	const int delim_pos = objname.find(params.delim, params.prefix.size());
+	  if (delim_pos >= 0) {
+	    /* extract key -with trailing delimiter- for CommonPrefix */
+	    const std::string& prefix_key =
+	      objname.substr(0, delim_pos + params.delim.length());
+
+	    if (common_prefixes &&
+		common_prefixes->find(prefix_key) == common_prefixes->end()) {
+          next_marker = prefix_key;
+          (*common_prefixes)[prefix_key] = true;
+          count++;
+        }
+        continue;
+      }
+    }
+
     if (!params.end_marker.name.empty() &&
         params.end_marker.name.compare(entry.key.name) <= 0) {
+      // should not include end_marker
       *is_truncated = false;
       break;
     }
+    count++;
     result->push_back(std::move(entry));
   }
 out:
@@ -813,7 +858,7 @@ int DB::Object::obj_omap_set_val_by_key(const DoutPrefixProvider *dpp,
 
   DBOpParams params = {};
 
-  store->InitializeParams(dpp, "GetObject", &params);
+  store->InitializeParams(dpp, &params);
   InitializeParamsfromObject(dpp, &params);
 
   ret = store->ProcessOp(dpp, "GetObject", &params);
@@ -856,7 +901,7 @@ int DB::Object::obj_omap_get_vals_by_keys(const DoutPrefixProvider *dpp,
   if (!vals)
     return -1;
 
-  store->InitializeParams(dpp, "GetObject", &params);
+  store->InitializeParams(dpp, &params);
   InitializeParamsfromObject(dpp, &params);
 
   ret = store->ProcessOp(dpp, "GetObject", &params);
@@ -888,7 +933,7 @@ int DB::Object::add_mp_part(const DoutPrefixProvider *dpp,
 
   DBOpParams params = {};
 
-  store->InitializeParams(dpp, "GetObject", &params);
+  store->InitializeParams(dpp, &params);
   InitializeParamsfromObject(dpp, &params);
 
   ret = store->ProcessOp(dpp, "GetObject", &params);
@@ -926,7 +971,7 @@ int DB::Object::get_mp_parts_list(const DoutPrefixProvider *dpp,
   DBOpParams params = {};
   std::map<std::string, bufferlist> omap;
 
-  store->InitializeParams(dpp, "GetObject", &params);
+  store->InitializeParams(dpp, &params);
   InitializeParamsfromObject(dpp, &params);
 
   ret = store->ProcessOp(dpp, "GetObject", &params);
@@ -970,7 +1015,7 @@ int DB::Object::obj_omap_get_all(const DoutPrefixProvider *dpp,
   if (!m)
     return -1;
 
-  store->InitializeParams(dpp, "GetObject", &params);
+  store->InitializeParams(dpp, &params);
   InitializeParamsfromObject(dpp, &params);
 
   ret = store->ProcessOp(dpp, "GetObject", &params);
@@ -1006,7 +1051,7 @@ int DB::Object::obj_omap_get_vals(const DoutPrefixProvider *dpp,
   if (!m)
     return -1;
 
-  store->InitializeParams(dpp, "GetObject", &params);
+  store->InitializeParams(dpp, &params);
   InitializeParamsfromObject(dpp, &params);
 
   ret = store->ProcessOp(dpp, "GetObject", &params);
@@ -1051,7 +1096,7 @@ int DB::Object::set_attrs(const DoutPrefixProvider *dpp,
   rgw::sal::Attrs *attrs;
   map<string, bufferlist>::iterator iter;
 
-  store->InitializeParams(dpp, "GetObject", &params);
+  store->InitializeParams(dpp, &params);
   InitializeParamsfromObject(dpp, &params);
 
   ret = store->ProcessOp(dpp, "GetObject", &params);
@@ -1100,7 +1145,7 @@ int DB::raw_obj::read(const DoutPrefixProvider *dpp, int64_t ofs,
   int ret = 0;
   DBOpParams params = {};
 
-  db->InitializeParams(dpp, "GetObjectData", &params);
+  db->InitializeParams(dpp, &params);
   InitializeParamsfromRawObj(dpp, &params);
 
   ret = db->ProcessOp(dpp, "GetObjectData", &params);
@@ -1131,7 +1176,7 @@ int DB::raw_obj::write(const DoutPrefixProvider *dpp, int64_t ofs, int64_t write
   int ret = 0;
   DBOpParams params = {};
 
-  db->InitializeParams(dpp, "PutObjectData", &params);
+  db->InitializeParams(dpp, &params);
   InitializeParamsfromRawObj(dpp, &params);
 
   /* XXX: Check for chunk_size ?? */
@@ -1152,7 +1197,7 @@ int DB::raw_obj::write(const DoutPrefixProvider *dpp, int64_t ofs, int64_t write
 }
 
 int DB::Object::follow_olh(const DoutPrefixProvider *dpp,
-                           const RGWBucketInfo& bucket_info, RGWObjState *state,
+                           const RGWBucketInfo& bucket_info, RGWObjState* state,
                            const rgw_obj& olh_obj, rgw_obj *target)
 {
   auto iter = state->attrset.find(RGW_ATTR_OLH_INFO);
@@ -1203,13 +1248,13 @@ int DB::Object::get_olh_target_state(const DoutPrefixProvider *dpp,
 
 int DB::Object::get_obj_state(const DoutPrefixProvider *dpp,
                               const RGWBucketInfo& bucket_info, const rgw_obj& obj,
-                              bool follow_olh, RGWObjState **state)
+                              bool follow_olh, RGWObjState** state)
 {
   int ret = 0;
 
   DBOpParams params = {};
   RGWObjState* s;
-  store->InitializeParams(dpp, "GetObject", &params);
+  store->InitializeParams(dpp, &params);
   InitializeParamsfromObject(dpp, &params);
 
   ret = store->ProcessOp(dpp, "GetObject", &params);
@@ -1227,6 +1272,7 @@ int DB::Object::get_obj_state(const DoutPrefixProvider *dpp,
   /* XXX: For now use state->shadow_obj to store ObjectID string */
   s->shadow_obj = params.op.obj.obj_id;
 
+  *state = &obj_state;
   **state = *s;
 
   if (follow_olh && params.op.obj.state.obj.key.instance.empty()) {
@@ -1243,29 +1289,14 @@ out:
 
 }
 
-int DB::Object::get_state(const DoutPrefixProvider *dpp, RGWObjState **pstate, bool follow_olh)
+int DB::Object::get_state(const DoutPrefixProvider *dpp, RGWObjState** pstate, bool follow_olh)
 {
   return get_obj_state(dpp, bucket_info, obj, follow_olh, pstate);
 }
 
-int DB::Object::get_manifest(const DoutPrefixProvider *dpp, RGWObjManifest **pmanifest)
-{
-  RGWObjState base_state;
-  RGWObjState *astate = &base_state;
-  int r = get_state(dpp, &astate, true);
-  if (r < 0) {
-    return r;
-  }
-
-  *pmanifest = &(*astate->manifest);
-
-  return 0;
-}
-
 int DB::Object::Read::get_attr(const DoutPrefixProvider *dpp, const char *name, bufferlist& dest)
 {
-  RGWObjState base_state;
-  RGWObjState *state = &base_state;
+  RGWObjState* state;
   int r = source->get_state(dpp, &state, true);
   if (r < 0)
     return r;
@@ -1286,8 +1317,7 @@ int DB::Object::Read::prepare(const DoutPrefixProvider *dpp)
 
   map<string, bufferlist>::iterator iter;
 
-  RGWObjState base_state;
-  RGWObjState *astate = &base_state;
+  RGWObjState* astate;
 
   /* XXX Read obj_id too */
   int r = source->get_state(dpp, &astate, true);
@@ -1375,8 +1405,7 @@ int DB::Object::Read::read(int64_t ofs, int64_t end, bufferlist& bl, const DoutP
   bufferlist read_bl;
   uint64_t max_chunk_size = store->get_max_chunk_size();
 
-  RGWObjState base_state;
-  RGWObjState *astate = &base_state;
+  RGWObjState* astate;
   int r = source->get_state(dpp, &astate, true);
   if (r < 0)
     return r;
@@ -1442,7 +1471,7 @@ int DB::Object::Read::read(int64_t ofs, int64_t end, bufferlist& bl, const DoutP
 static int _get_obj_iterate_cb(const DoutPrefixProvider *dpp,
     const DB::raw_obj& read_obj, off_t obj_ofs,
     off_t len, bool is_head_obj,
-    RGWObjState *astate, void *arg)
+    RGWObjState* astate, void *arg)
 {
   struct db_get_obj_data* d = static_cast<struct db_get_obj_data*>(arg);
   return d->store->get_obj_iterate_cb(dpp, read_obj, obj_ofs, len,
@@ -1452,7 +1481,7 @@ static int _get_obj_iterate_cb(const DoutPrefixProvider *dpp,
 int DB::get_obj_iterate_cb(const DoutPrefixProvider *dpp,
     const raw_obj& read_obj, off_t obj_ofs,
     off_t len, bool is_head_obj,
-    RGWObjState *astate, void *arg)
+    RGWObjState* astate, void *arg)
 {
   struct db_get_obj_data* d = static_cast<struct db_get_obj_data*>(arg);
   bufferlist bl;
@@ -1512,8 +1541,7 @@ int DB::Object::iterate_obj(const DoutPrefixProvider *dpp,
 {
   DB *store = get_store();
   uint64_t len;
-  RGWObjState base_state;
-  RGWObjState *astate = &base_state;
+  RGWObjState* astate;
 
   int r = get_state(dpp, &astate, true);
   if (r < 0) {
@@ -1631,7 +1659,7 @@ int DB::Object::Write::_do_write_meta(const DoutPrefixProvider *dpp,
 {
   DB *store = target->get_store();
 
-  RGWObjState *state = &obj_state;
+  RGWObjState* state = &obj_state;
   map<string, bufferlist> *attrset;
   DBOpParams params = {};
   int ret = 0;
@@ -1642,7 +1670,7 @@ int DB::Object::Write::_do_write_meta(const DoutPrefixProvider *dpp,
 
   map<string, bufferlist>::iterator iter;
 
-  store->InitializeParams(dpp, "PutObject", &params);
+  store->InitializeParams(dpp, &params);
   target->InitializeParamsfromObject(dpp, &params);
 
   obj_state = params.op.obj.state;
@@ -1767,8 +1795,7 @@ int DB::Object::Write::write_meta(const DoutPrefixProvider *dpp, uint64_t size, 
 int DB::Object::Delete::delete_obj(const DoutPrefixProvider *dpp) {
   int ret = 0;
   DB *store = target->get_store();
-  RGWObjState base_state;
-  RGWObjState *astate = &base_state;
+  RGWObjState* astate;
 
   int r = target->get_state(dpp, &astate, true);
   if (r < 0)
@@ -1783,7 +1810,7 @@ int DB::Object::Delete::delete_obj(const DoutPrefixProvider *dpp) {
   /* XXX: check params conditions */
   DBOpParams del_params = {};
 
-  store->InitializeParams(dpp, "DeleteObject", &del_params);
+  store->InitializeParams(dpp, &del_params);
   target->InitializeParamsfromObject(dpp, &del_params);
 
   ret = store->ProcessOp(dpp, "DeleteObject", &del_params);
@@ -1820,7 +1847,7 @@ int DB::get_entry(const std::string& oid, const std::string& marker,
   const DoutPrefixProvider *dpp = get_def_dpp();
 
   DBOpParams params = {};
-  InitializeParams(dpp, "GetLCEntry", &params);
+  InitializeParams(dpp, &params);
 
   params.op.lc_entry.index = oid;
   params.op.lc_entry.entry.bucket = marker;
@@ -1848,7 +1875,7 @@ int DB::get_next_entry(const std::string& oid, std::string& marker,
   const DoutPrefixProvider *dpp = get_def_dpp();
 
   DBOpParams params = {};
-  InitializeParams(dpp, "GetLCEntry", &params);
+  InitializeParams(dpp, &params);
 
   params.op.lc_entry.index = oid;
   params.op.lc_entry.entry.bucket = marker;
@@ -1875,7 +1902,7 @@ int DB::set_entry(const std::string& oid, const rgw::sal::Lifecycle::LCEntry& en
   const DoutPrefixProvider *dpp = get_def_dpp();
 
   DBOpParams params = {};
-  InitializeParams(dpp, "InsertLCEntry", &params);
+  InitializeParams(dpp, &params);
 
   params.op.lc_entry.index = oid;
   params.op.lc_entry.entry = entry;
@@ -1900,7 +1927,7 @@ int DB::list_entries(const std::string& oid, const std::string& marker,
   entries.clear();
 
   DBOpParams params = {};
-  InitializeParams(dpp, "ListLCEntries", &params);
+  InitializeParams(dpp, &params);
 
   params.op.lc_entry.index = oid;
   params.op.lc_entry.min_marker = marker;
@@ -1927,7 +1954,7 @@ int DB::rm_entry(const std::string& oid, const rgw::sal::Lifecycle::LCEntry& ent
   const DoutPrefixProvider *dpp = get_def_dpp();
 
   DBOpParams params = {};
-  InitializeParams(dpp, "RemoveLCEntry", &params);
+  InitializeParams(dpp, &params);
 
   params.op.lc_entry.index = oid;
   params.op.lc_entry.entry = entry;
@@ -1949,7 +1976,7 @@ int DB::get_head(const std::string& oid, rgw::sal::Lifecycle::LCHead& head)
   const DoutPrefixProvider *dpp = get_def_dpp();
 
   DBOpParams params = {};
-  InitializeParams(dpp, "GetLCHead", &params);
+  InitializeParams(dpp, &params);
 
   params.op.lc_head.index = oid;
 
@@ -1972,7 +1999,7 @@ int DB::put_head(const std::string& oid, const rgw::sal::Lifecycle::LCHead& head
   const DoutPrefixProvider *dpp = get_def_dpp();
 
   DBOpParams params = {};
-  InitializeParams(dpp, "InsertLCHead", &params);
+  InitializeParams(dpp, &params);
 
   params.op.lc_head.index = oid;
   params.op.lc_head.head = head;
@@ -1998,7 +2025,7 @@ int DB::delete_stale_objs(const DoutPrefixProvider *dpp, const std::string& buck
    * XXX: This is needed for now to create objectmap of bucket
    * in SQLGetBucket
    */
-  InitializeParams(dpp, "GetBucket", &params);
+  InitializeParams(dpp, &params);
   ret = ProcessOp(dpp, "GetBucket", &params);
   if (ret) {
     ldpp_dout(dpp, 0) << "In GetBucket failed err:(" <<ret<<")" << dendl;
@@ -2008,7 +2035,7 @@ int DB::delete_stale_objs(const DoutPrefixProvider *dpp, const std::string& buck
   /* XXX: handle reads racing with delete here. Simple approach is maybe
    * to use locks or sqlite transactions.
    */
-  InitializeParams(dpp, "DeleteStaleObjectData", &params);
+  InitializeParams(dpp, &params);
   params.op.obj.state.mtime = (real_clock::now() - make_timespan(min_wait));
   ret = ProcessOp(dpp, "DeleteStaleObjectData", &params);
   if (ret) {
@@ -2020,6 +2047,8 @@ int DB::delete_stale_objs(const DoutPrefixProvider *dpp, const std::string& buck
 
 void *DB::GC::entry() {
   do {
+    std::unique_lock<std::mutex> lk(mtx);
+
     ldpp_dout(dpp, 2) << " DB GC started " << dendl;
     int max = 100;
     RGWUserBuckets buckets;
@@ -2051,15 +2080,18 @@ void *DB::GC::entry() {
         user_marker = user.id;
 
         /* XXX: If using locks, unlock here and reacquire in the next iteration */
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        cv.wait_for(lk, std::chrono::milliseconds(100));
+	if (stop_signalled) {
+	  goto done;
+	}
       }
     } while(is_truncated);
 
     bucket_marker.clear();
-    std::this_thread::sleep_for(std::chrono::milliseconds(gc_interval*10));
+    cv.wait_for(lk, std::chrono::milliseconds(gc_interval*10));
+  } while(! stop_signalled);
 
-  } while(1);
-
+done:
   return nullptr;
 }
 

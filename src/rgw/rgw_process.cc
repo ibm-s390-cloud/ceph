@@ -290,9 +290,6 @@ int process_request(rgw::sal::Store* const store,
   std::unique_ptr<rgw::sal::User> u = store->get_user(rgw_user());
   s->set_user(u);
 
-  RGWObjectCtx rados_ctx(store, s);
-  s->obj_ctx = &rados_ctx;
-
   if (ret < 0) {
     s->cio = client_io;
     abort_early(s, nullptr, ret, nullptr, yield);
@@ -331,6 +328,7 @@ int process_request(rgw::sal::Store* const store,
     goto done;
   }
   {
+    s->trace_enabled = tracing::rgw::tracer.is_enabled();
     std::string script;
     auto rc = rgw::lua::read_script(s, store, s->bucket_tenant, s->yield, rgw::lua::context::preRequest, script);
     if (rc == -ENOENT) {
@@ -386,8 +384,9 @@ int process_request(rgw::sal::Store* const store,
       goto done;
     }
 
+
     const auto trace_name = std::string(op->name()) + " " + s->trans_id;
-    s->trace = tracing::rgw::tracer.start_trace(trace_name);
+    s->trace = tracing::rgw::tracer.start_trace(trace_name, s->trace_enabled);
     s->trace->SetAttribute(tracing::rgw::OP, op->name());
     s->trace->SetAttribute(tracing::rgw::TYPE, tracing::rgw::REQUEST);
 

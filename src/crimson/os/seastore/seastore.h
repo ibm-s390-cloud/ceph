@@ -11,6 +11,7 @@
 
 #include <optional>
 #include <seastar/core/future.hh>
+#include <seastar/core/metrics_types.hh>
 
 #include "include/uuid.h"
 
@@ -18,6 +19,7 @@
 #include "crimson/os/futurized_collection.h"
 #include "crimson/os/futurized_store.h"
 
+#include "crimson/os/seastore/device.h"
 #include "crimson/os/seastore/transaction.h"
 #include "crimson/os/seastore/onode_manager.h"
 #include "crimson/os/seastore/omap_manager.h"
@@ -65,13 +67,13 @@ public:
   SeaStore(
     const std::string& root,
     MDStoreRef mdstore,
-    SegmentManagerRef sm,
+    DeviceRef device,
     TransactionManagerRef tm,
     CollectionManagerRef cm,
     OnodeManagerRef om);
   SeaStore(
     const std::string& root,
-    SegmentManagerRef sm,
+    DeviceRef device,
     TransactionManagerRef tm,
     CollectionManagerRef cm,
     OnodeManagerRef om);
@@ -122,7 +124,7 @@ public:
     const std::optional<std::string> &start ///< [in] start, empty for begin
     ) final; ///< @return <done, values> values.empty() iff done
 
-  read_errorator::future<bufferlist> omap_get_header(
+  get_attr_errorator::future<bufferlist> omap_get_header(
     CollectionRef c,
     const ghobject_t& oid) final;
 
@@ -147,7 +149,7 @@ public:
   seastar::future<OmapIteratorRef> get_omap_iterator(
     CollectionRef ch,
     const ghobject_t& oid) final;
-  seastar::future<std::map<uint64_t, uint64_t>> fiemap(
+  read_errorator::future<std::map<uint64_t, uint64_t>> fiemap(
     CollectionRef ch,
     const ghobject_t& oid,
     uint64_t off,
@@ -311,8 +313,8 @@ private:
 
   std::string root;
   MDStoreRef mdstore;
-  SegmentManagerRef segment_manager;
-  std::vector<SegmentManagerRef> secondaries;
+  DeviceRef device;
+  std::vector<DeviceRef> secondaries;
   TransactionManagerRef transaction_manager;
   CollectionManagerRef collection_manager;
   OnodeManagerRef onode_manager;
@@ -338,6 +340,10 @@ private:
     uint64_t offset, size_t len,
     ceph::bufferlist &&bl,
     uint32_t fadvise_flags);
+  tm_ret _zero(
+    internal_context_t &ctx,
+    OnodeRef &onode,
+    objaddr_t offset, extent_len_t len);
   tm_ret _omap_set_values(
     internal_context_t &ctx,
     OnodeRef &onode,
@@ -346,6 +352,9 @@ private:
     internal_context_t &ctx,
     OnodeRef &onode,
     ceph::bufferlist &&header);
+  tm_ret _omap_clear(
+    internal_context_t &ctx,
+    OnodeRef &onode);
   tm_ret _omap_rmkeys(
     internal_context_t &ctx,
     OnodeRef &onode,
@@ -362,6 +371,20 @@ private:
     internal_context_t &ctx,
     OnodeRef &onode,
     std::map<std::string,bufferlist>&& aset);
+  tm_ret _rmattr(
+    internal_context_t &ctx,
+    OnodeRef &onode,
+    std::string name);
+  tm_ret _rmattrs(
+    internal_context_t &ctx,
+    OnodeRef &onode);
+  tm_ret _xattr_rmattr(
+    internal_context_t &ctx,
+    OnodeRef &onode,
+    std::string &&name);
+  tm_ret _xattr_clear(
+    internal_context_t &ctx,
+    OnodeRef &onode);
   tm_ret _create_collection(
     internal_context_t &ctx,
     const coll_t& cid, int bits);
