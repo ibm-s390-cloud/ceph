@@ -293,7 +293,7 @@ public:
     }
 
     for (auto it = mds_roles.begin(); it != mds_roles.end();) {
-      auto = fs_name_from_gid(it->first);
+      auto fs_name = fs_name_from_gid(it->first);
       if (std::find(allowed.begin(), allowed.end(), fs_name) == allowed.end()) {
         it = mds_roles.erase(it);
       } else {
