@@ -548,6 +548,7 @@ WRITE_CLASS_ENCODER_FEATURES(entity_addr_t)
 
 std::ostream& operator<<(std::ostream& out, const entity_addr_t &addr);
 
+// change
 namespace details {
 using namespace boost::endian;
 
