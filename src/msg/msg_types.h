@@ -18,6 +18,7 @@
 #include <sstream>
 
 #include <netinet/in.h>
+#include <boost/endian.hpp>
 
 #include "include/ceph_features.h"
 #include "include/types.h"
@@ -549,12 +550,71 @@ WRITE_CLASS_ENCODER_FEATURES(entity_addr_t)
 
 std::ostream& operator<<(std::ostream& out, const entity_addr_t &addr);
 
-inline bool operator==(const entity_addr_t& a, const entity_addr_t& b) { return a.nonce == b.nonce; }
-inline bool operator!=(const entity_addr_t& a, const entity_addr_t& b) { return a.nonce != b.nonce; }
-inline bool operator<(const entity_addr_t& a, const entity_addr_t& b) { return a.nonce < b.nonce; }
-inline bool operator<=(const entity_addr_t& a, const entity_addr_t& b) { return a.nonce <= b.nonce; }
-inline bool operator>(const entity_addr_t& a, const entity_addr_t& b) { return a.nonce > b.nonce; }
-inline bool operator>=(const entity_addr_t& a, const entity_addr_t& b) { return a.nonce >= b.nonce; }
+namespace details {
+using namespace boost::endian;
+
+inline auto ipv4_to_tuple(const entity_addr_t& e) {
+  // in exactly the same order of elements in sockaddr_in
+  return make_tuple(e.type,
+                    e.nonce,
+                    native_to_little(AF_INET),
+                    native_to_little(e.u.sin.sin_port),
+                    e.u.sin.sin_addr);
+}
+
+inline auto ipv6_to_tuple(const entity_addr_t& e) {
+  // in exactly the same order of elements in sockaddr_in6
+  return make_tuple(e.type,
+                    e.nonce,
+                    native_to_little(AF_INET6),
+                    native_to_little(e.u.sin6.sin6_port),
+                    native_to_little(e.u.sin6.sin6_flowinfo),
+                    e.u.sin6.sin6_addr,
+                    native_to_little(e.u.sin6.sin6_scope_id));
+}
+} // namespace details
+
+inline bool operator<(const in_addr& lhs, const in_addr& rhs) {
+  return memcmp(&lhs, &rhs, sizeof(in_addr)) < 0;
+}
+inline bool operator<(const in6_addr& lhs, const in6_addr& rhs) {
+  return memcmp(&lhs, &rhs, sizeof(in6_addr)) < 0;
+}
+
+inline bool operator==(const entity_addr_t& lhs, const entity_addr_t& rhs) {
+  return memcmp(&lhs, &rhs, sizeof(lhs)) == 0;
+}
+inline bool operator!=(const entity_addr_t& lhs, const entity_addr_t& rhs) {
+  return memcmp(&lhs, &rhs, sizeof(lhs)) != 0;
+}
+inline bool operator<(const entity_addr_t& lhs, const entity_addr_t& rhs) {
+  if (lhs.u.sa.sa_family == AF_INET) {
+    return details::ipv4_to_tuple(lhs) < details::ipv4_to_tuple(rhs);
+  } else {
+    return details::ipv6_to_tuple(lhs) < details::ipv6_to_tuple(rhs);
+  } 
+}
+inline bool operator<=(const entity_addr_t& lhs, const entity_addr_t& rhs) {
+  if (lhs.u.sa.sa_family == AF_INET) {
+    return details::ipv4_to_tuple(lhs) <= details::ipv4_to_tuple(rhs);
+  } else {
+    return details::ipv6_to_tuple(lhs) <= details::ipv6_to_tuple(rhs);
+  } 
+}
+inline bool operator>(const entity_addr_t& lhs, const entity_addr_t& rhs) {
+  if (lhs.u.sa.sa_family == AF_INET) {
+    return details::ipv4_to_tuple(lhs) > details::ipv4_to_tuple(rhs);
+  } else {
+    return details::ipv6_to_tuple(lhs) > details::ipv6_to_tuple(rhs);
+  }
+}
+inline bool operator>=(const entity_addr_t& lhs, const entity_addr_t& rhs) {
+  if (lhs.u.sa.sa_family == AF_INET) {
+    return details::ipv4_to_tuple(lhs) >= details::ipv4_to_tuple(rhs);
+  } else {
+    return details::ipv6_to_tuple(lhs) >= details::ipv6_to_tuple(rhs);
+  }
+}
 
 namespace std {
 template<> struct hash<entity_addr_t> {
