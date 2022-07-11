@@ -588,31 +588,36 @@ inline bool operator!=(const entity_addr_t& lhs, const entity_addr_t& rhs) {
   return memcmp(&lhs, &rhs, sizeof(lhs)) != 0;
 }
 inline bool operator<(const entity_addr_t& lhs, const entity_addr_t& rhs) {
-  if (lhs.u.sa.sa_family == AF_INET) {
-    return details::ipv4_to_tuple(lhs) < details::ipv4_to_tuple(rhs);
+  if constexpr (boost::endian::order::native == boost::endian::order::little) {
+    return memcmp(&lhs, &rhs, sizeof(entity_addr_t)) < 0;
   } else {
-    return details::ipv6_to_tuple(lhs) < details::ipv6_to_tuple(rhs);
-  } 
-}
-inline bool operator<=(const entity_addr_t& lhs, const entity_addr_t& rhs) {
-  if (lhs.u.sa.sa_family == AF_INET) {
-    return details::ipv4_to_tuple(lhs) <= details::ipv4_to_tuple(rhs);
-  } else {
-    return details::ipv6_to_tuple(lhs) <= details::ipv6_to_tuple(rhs);
-  } 
-}
-inline bool operator>(const entity_addr_t& lhs, const entity_addr_t& rhs) {
-  if (lhs.u.sa.sa_family == AF_INET) {
-    return details::ipv4_to_tuple(lhs) > details::ipv4_to_tuple(rhs);
-  } else {
-    return details::ipv6_to_tuple(lhs) > details::ipv6_to_tuple(rhs);
+    if (lhs.u.sa.sa_family == AF_INET) {
+      return details::ipv4_to_tuple(lhs) < details::ipv4_to_tuple(rhs);
+    } else {
+      return details::ipv6_to_tuple(lhs) < details::ipv6_to_tuple(rhs);
+    }
   }
 }
-inline bool operator>=(const entity_addr_t& lhs, const entity_addr_t& rhs) {
-  if (lhs.u.sa.sa_family == AF_INET) {
-    return details::ipv4_to_tuple(lhs) >= details::ipv4_to_tuple(rhs);
+inline bool operator<=(const entity_addr_t& lhs, const entity_addr_t& rhs) {
+  if constexpr (boost::endian::order::native == boost::endian::order::little) {
+    return memcmp(&lhs, &rhs, sizeof(entity_addr_t)) <= 0;
   } else {
-    return details::ipv6_to_tuple(lhs) >= details::ipv6_to_tuple(rhs);
+    if (lhs.u.sa.sa_family == AF_INET) {
+      return details::ipv4_to_tuple(lhs) <= details::ipv4_to_tuple(rhs);
+    } else {
+      return details::ipv6_to_tuple(lhs) <= details::ipv6_to_tuple(rhs);
+    } 
+  }
+}
+inline bool operator>(const entity_addr_t& lhs, const entity_addr_t& rhs) {
+  if constexpr (boost::endian::order::native == boost::endian::order::little) {
+    return memcmp(&lhs, &rhs, sizeof(entity_addr_t)) > 0;
+  } else {
+    if (lhs.u.sa.sa_family == AF_INET) {
+      return details::ipv4_to_tuple(lhs) > details::ipv4_to_tuple(rhs);
+    } else {
+      return details::ipv6_to_tuple(lhs) > details::ipv6_to_tuple(rhs);
+    }
   }
 }
 
