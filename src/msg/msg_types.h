@@ -18,6 +18,7 @@
 #include <sstream>
 
 #include <netinet/in.h>
+#include <boost/endian.hpp>
 
 #include "include/ceph_features.h"
 #include "include/types.h"
@@ -241,18 +242,22 @@ struct entity_addr_t {
     }
   };
 
-  __u32 type;
-  __u32 nonce;
+  ceph_le32 type;
+  ceph_le32 nonce;
   union {
     sockaddr sa;
     sockaddr_in sin;
     sockaddr_in6 sin6;
   } u;
 
-  entity_addr_t() : type(0), nonce(0) {
+  entity_addr_t() {
+    type = 0;
+    nonce = 0;
     memset(&u, 0, sizeof(u));
   }
-  entity_addr_t(__u32 _type, __u32 _nonce) : type(_type), nonce(_nonce) {
+  entity_addr_t(__u32 _type, __u32 _nonce) {
+    type = _type;
+    nonce = _nonce;
     memset(&u, 0, sizeof(u));
   }
   explicit entity_addr_t(const ceph_entity_addr &o) {
@@ -548,12 +553,76 @@ WRITE_CLASS_ENCODER_FEATURES(entity_addr_t)
 
 std::ostream& operator<<(std::ostream& out, const entity_addr_t &addr);
 
-inline bool operator==(const entity_addr_t& a, const entity_addr_t& b) { return memcmp(&a, &b, sizeof(a)) == 0; }
-inline bool operator!=(const entity_addr_t& a, const entity_addr_t& b) { return memcmp(&a, &b, sizeof(a)) != 0; }
-inline bool operator<(const entity_addr_t& a, const entity_addr_t& b) { return memcmp(&a, &b, sizeof(a)) < 0; }
-inline bool operator<=(const entity_addr_t& a, const entity_addr_t& b) { return memcmp(&a, &b, sizeof(a)) <= 0; }
-inline bool operator>(const entity_addr_t& a, const entity_addr_t& b) { return memcmp(&a, &b, sizeof(a)) > 0; }
-inline bool operator>=(const entity_addr_t& a, const entity_addr_t& b) { return memcmp(&a, &b, sizeof(a)) >= 0; }
+namespace details {
+using namespace boost::endian;
+
+inline auto ipv4_to_tuple(const entity_addr_t& e) {
+  // in exactly the same order of elements in sockaddr_in
+  return make_tuple(e.type,
+                    e.nonce,
+                    native_to_little(AF_INET),
+                    native_to_little(e.u.sin.sin_port),
+                    e.u.sin.sin_addr);
+}
+
+inline auto ipv6_to_tuple(const entity_addr_t& e) {
+  // in exactly the same order of elements in sockaddr_in6
+  return make_tuple(e.type,
+                    e.nonce,
+                    native_to_little(AF_INET6),
+                    native_to_little(e.u.sin6.sin6_port),
+                    native_to_little(e.u.sin6.sin6_flowinfo),
+                    e.u.sin6.sin6_addr,
+                    native_to_little(e.u.sin6.sin6_scope_id));
+}
+} // namespace details
+
+inline bool operator<(const in_addr& lhs, const in_addr& rhs) {
+  return memcmp(&lhs, &rhs, sizeof(in_addr)) < 0;
+}
+inline bool operator<(const in6_addr& lhs, const in6_addr& rhs) {
+  return memcmp(&lhs, &rhs, sizeof(in6_addr)) < 0;
+}
+
+inline bool operator==(const entity_addr_t& lhs, const entity_addr_t& rhs) {
+  return memcmp(&lhs, &rhs, sizeof(lhs)) == 0;
+}
+inline bool operator!=(const entity_addr_t& lhs, const entity_addr_t& rhs) {
+  return memcmp(&lhs, &rhs, sizeof(lhs)) != 0;
+}
+inline bool operator<(const entity_addr_t& lhs, const entity_addr_t& rhs) {
+  if constexpr (boost::endian::order::native == boost::endian::order::little) {
+    return memcmp(&lhs, &rhs, sizeof(entity_addr_t)) < 0;
+  } else {
+    if (lhs.u.sa.sa_family == AF_INET) {
+      return details::ipv4_to_tuple(lhs) < details::ipv4_to_tuple(rhs);
+    } else {
+      return details::ipv6_to_tuple(lhs) < details::ipv6_to_tuple(rhs);
+    }
+  }
+}
+inline bool operator<=(const entity_addr_t& lhs, const entity_addr_t& rhs) {
+  if constexpr (boost::endian::order::native == boost::endian::order::little) {
+    return memcmp(&lhs, &rhs, sizeof(entity_addr_t)) <= 0;
+  } else {
+    if (lhs.u.sa.sa_family == AF_INET) {
+      return details::ipv4_to_tuple(lhs) <= details::ipv4_to_tuple(rhs);
+    } else {
+      return details::ipv6_to_tuple(lhs) <= details::ipv6_to_tuple(rhs);
+    }
+  }
+}
+inline bool operator>(const entity_addr_t& lhs, const entity_addr_t& rhs) {
+  if constexpr (boost::endian::order::native == boost::endian::order::little) {
+    return memcmp(&lhs, &rhs, sizeof(entity_addr_t)) > 0;
+  } else {
+    if (lhs.u.sa.sa_family == AF_INET) {
+      return details::ipv4_to_tuple(lhs) > details::ipv4_to_tuple(rhs);
+    } else {
+      return details::ipv6_to_tuple(lhs) > details::ipv6_to_tuple(rhs);
+    }
+  }
+}
 
 namespace std {
 template<> struct hash<entity_addr_t> {
