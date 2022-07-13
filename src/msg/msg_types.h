@@ -555,8 +555,8 @@ using namespace boost::endian;
 
 inline auto ipv4_to_tuple(const entity_addr_t& e) {
   // in exactly the same order of elements in sockaddr_in
-  return make_tuple(e.type,
-                    e.nonce,
+  return make_tuple(native_to_little(e.type),
+                    native_to_little(e.nonce),
                     native_to_little(AF_INET),
                     native_to_little(e.u.sin.sin_port),
                     e.u.sin.sin_addr);
@@ -564,8 +564,8 @@ inline auto ipv4_to_tuple(const entity_addr_t& e) {
 
 inline auto ipv6_to_tuple(const entity_addr_t& e) {
   // in exactly the same order of elements in sockaddr_in6
-  return make_tuple(e.type,
-                    e.nonce,
+  return make_tuple(native_to_little(e.type),
+                    native_to_little(e.nonce),
                     native_to_little(AF_INET6),
                     native_to_little(e.u.sin6.sin6_port),
                     native_to_little(e.u.sin6.sin6_flowinfo),
