@@ -3646,13 +3646,13 @@ options:
 - name: osd_max_object_name_len
   type: uint
   level: advanced
-  default: 2_K
+  default: 400
   with_legacy: true
 # max rados object namespace len
 - name: osd_max_object_namespace_len
   type: uint
   level: advanced
-  default: 256
+  default: 64
   with_legacy: true
 # max rados attr name len; cannot go higher than 100 chars for file system backends
 - name: osd_max_attr_name_len

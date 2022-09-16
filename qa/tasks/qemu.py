@@ -488,7 +488,7 @@ def run_qemu(ctx, config):
         remote.run(args='sudo udevadm trigger /dev/kvm')
         remote.run(args='ls -l /dev/kvm')
 
-        qemu_cmd = 'qemu-system-x86_64'
+        qemu_cmd = 'qemu-system-s390x'
         if remote.os.package_type == "rpm":
             qemu_cmd = "/usr/libexec/qemu-kvm"
         args=[

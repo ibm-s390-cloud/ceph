@@ -1,4 +1,4 @@
-arch: x86_64
+arch: s390x
 roles:
 - - mon.a
   - mgr.x

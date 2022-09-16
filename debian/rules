@@ -52,6 +52,10 @@ ifneq (,$(filter with_system_libs,$(DEB_BUILD_OPTIONS)))
   extraopts += -DWITH_SYSTEM_PMDK=ON
 endif
 
+# s390x opts
+extraopts += -DWITH_SPDK=OFF
+extraopts += -DCMAKE_BUILD_TYPE=Release
+
 %:
 	dh $@ --buildsystem=cmake --with javahelper,python3,systemd --parallel
 

@@ -6,7 +6,7 @@ source $CEPH_ROOT/qa/standalone/ceph-helpers.sh
 arch=$(uname -m)
 
 case $arch in
-    i[[3456]]86*|x86_64*|amd64*)
+    i[[3456]]86*|x86_64*|amd64*|s390x*)
         legacy_jerasure_plugins=(jerasure_generic jerasure_sse3 jerasure_sse4)
         legacy_shec_plugins=(shec_generic shec_sse3 shec_sse4)
         plugins=(jerasure shec lrc isa)
