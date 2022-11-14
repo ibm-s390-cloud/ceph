@@ -24,7 +24,7 @@ from tasks import ceph_manager
 log = logging.getLogger(__name__)
 
 
-DAEMON_WAIT_TIMEOUT = 120
+DAEMON_WAIT_TIMEOUT = 1200
 ROOT_INO = 1
 
 class FileLayout(object):

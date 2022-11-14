@@ -1,4 +1,4 @@
 overrides:
   ceph:
     cephfs:
-      session_timeout: 300
+      session_timeout: 3000
