@@ -74,7 +74,8 @@ POOL_SCHEMA = ([{
     "expected_num_objects": (int, ""),
     "fast_read": (bool, ""),
     "options": ({
-        "pg_num_min": (int, "")
+        "pg_num_min": (int, ""),
+        "pg_num_max": (int, "")
     }, ""),
     "application_metadata": ([str], ""),
     "create_time": (str, ""),
@@ -343,3 +344,9 @@ class PoolUi(Pool):
             "used_profiles": used_profiles,
             'nodes': mgr.get('osd_map_tree')['nodes']
         }
+
+
+class RBDPool(Pool):
+    def create(self, pool='rbd-mirror'):  # pylint: disable=arguments-differ
+        super().create(pool, pg_num=1, pool_type='replicated',
+                       rule_name='replicated_rule', application_metadata=['rbd'])

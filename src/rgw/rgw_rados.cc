@@ -2330,19 +2330,25 @@ bool RGWRados::obj_to_raw(const rgw_placement_rule& placement_rule, const rgw_ob
   return get_obj_data_pool(placement_rule, obj, &raw_obj->pool);
 }
 
-int RGWRados::get_obj_head_ioctx(const DoutPrefixProvider *dpp, const RGWBucketInfo& bucket_info, const rgw_obj& obj, librados::IoCtx *ioctx)
+int RGWRados::get_obj_head_ioctx(const DoutPrefixProvider *dpp,
+				 const RGWBucketInfo& bucket_info,
+				 const rgw_obj& obj,
+				 librados::IoCtx *ioctx)
 {
-  string oid, key;
+  std::string oid, key;
   get_obj_bucket_and_oid_loc(obj, oid, key);
 
   rgw_pool pool;
   if (!get_obj_data_pool(bucket_info.placement_rule, obj, &pool)) {
-    ldpp_dout(dpp, 0) << "ERROR: cannot get data pool for obj=" << obj << ", probably misconfiguration" << dendl;
+    ldpp_dout(dpp, 0) << "ERROR: cannot get data pool for obj=" << obj <<
+      ", probably misconfiguration" << dendl;
     return -EIO;
   }
 
   int r = open_pool_ctx(dpp, pool, *ioctx, false);
   if (r < 0) {
+    ldpp_dout(dpp, 0) << "ERROR: unable to open data-pool=" << pool.to_str() <<
+      " for obj=" << obj << " with error-code=" << r << dendl;
     return r;
   }
 
@@ -2351,12 +2357,15 @@ int RGWRados::get_obj_head_ioctx(const DoutPrefixProvider *dpp, const RGWBucketI
   return 0;
 }
 
-int RGWRados::get_obj_head_ref(const DoutPrefixProvider *dpp, const RGWBucketInfo& bucket_info, const rgw_obj& obj, rgw_rados_ref *ref)
+int RGWRados::get_obj_head_ref(const DoutPrefixProvider *dpp,
+                               const rgw_placement_rule& target_placement_rule,
+                               const rgw_obj& obj,
+                               rgw_rados_ref *ref)
 {
   get_obj_bucket_and_oid_loc(obj, ref->obj.oid, ref->obj.loc);
 
   rgw_pool pool;
-  if (!get_obj_data_pool(bucket_info.placement_rule, obj, &pool)) {
+  if (!get_obj_data_pool(target_placement_rule, obj, &pool)) {
     ldpp_dout(dpp, 0) << "ERROR: cannot get data pool for obj=" << obj << ", probably misconfiguration" << dendl;
     return -EIO;
   }
@@ -2373,6 +2382,14 @@ int RGWRados::get_obj_head_ref(const DoutPrefixProvider *dpp, const RGWBucketInf
   ref->pool.ioctx().locator_set_key(ref->obj.loc);
 
   return 0;
+}
+
+int RGWRados::get_obj_head_ref(const DoutPrefixProvider *dpp,
+                               const RGWBucketInfo& bucket_info,
+                               const rgw_obj& obj,
+                               rgw_rados_ref *ref)
+{
+  return get_obj_head_ref(dpp, bucket_info.placement_rule, obj, ref);
 }
 
 int RGWRados::get_raw_obj_ref(const DoutPrefixProvider *dpp, const rgw_raw_obj& obj, rgw_rados_ref *ref)
@@ -3025,7 +3042,7 @@ int RGWRados::Object::Write::_do_write_meta(const DoutPrefixProvider *dpp,
   }
 
   rgw_rados_ref ref;
-  r = store->get_obj_head_ref(dpp, target->get_bucket_info(), obj, &ref);
+  r = store->get_obj_head_ref(dpp, target->get_meta_placement_rule(), obj, &ref);
   if (r < 0)
     return r;
 
@@ -4357,7 +4374,7 @@ int RGWRados::copy_obj(RGWObjectCtx& obj_ctx,
 
   bufferlist first_chunk;
 
-  bool copy_itself = (dest_obj == src_obj);
+  const bool copy_itself = (dest_obj->get_obj() == src_obj->get_obj());
   RGWObjManifest *pmanifest; 
   ldpp_dout(dpp, 20) << "dest_obj=" << dest_obj << " src_obj=" << src_obj << " copy_itself=" << (int)copy_itself << dendl;
 
@@ -4796,10 +4813,16 @@ int RGWRados::Object::complete_atomic_modification(const DoutPrefixProvider *dpp
   }
 
   string tag = (state->tail_tag.length() > 0 ? state->tail_tag.to_str() : state->obj_tag.to_str());
-  auto ret = store->gc->send_chain(chain, tag); // do it synchronously
-  if (ret < 0) {
-    //Delete objects inline if send chain to gc fails
+  if (store->gc == nullptr) {
+    ldpp_dout(dpp, 0) << "deleting objects inline since gc isn't initialized" << dendl;
+    //Delete objects inline just in case gc hasn't been initialised, prevents crashes
     store->delete_objs_inline(dpp, chain, tag);
+  } else {
+    auto [ret, leftover_chain] = store->gc->send_split_chain(chain, tag); // do it synchronously
+    if (ret < 0 && leftover_chain) {
+      //Delete objects inline if send chain to gc fails
+      store->delete_objs_inline(dpp, *leftover_chain, tag);
+    }
   }
   return 0;
 }
@@ -4818,13 +4841,13 @@ void RGWRados::update_gc_chain(const DoutPrefixProvider *dpp, rgw_obj& head_obj,
   }
 }
 
-int RGWRados::send_chain_to_gc(cls_rgw_obj_chain& chain, const string& tag)
+std::tuple<int, std::optional<cls_rgw_obj_chain>> RGWRados::send_chain_to_gc(cls_rgw_obj_chain& chain, const string& tag)
 {
   if (chain.empty()) {
-    return 0;
+    return {0, std::nullopt};
   }
 
-  return gc->send_chain(chain, tag);
+  return gc->send_split_chain(chain, tag);
 }
 
 void RGWRados::delete_objs_inline(const DoutPrefixProvider *dpp, cls_rgw_obj_chain& chain, const string& tag)
@@ -8760,6 +8783,7 @@ int RGWRados::cls_bucket_list_unordered(const DoutPrefixProvider *dpp,
 	  ent_list.emplace_back(std::move(dirent));
 	  ++count;
 	} else {
+	  last_added_entry = dirent.key;
 	  *is_truncated = true;
 	  goto check_updates;
 	}
@@ -8954,6 +8978,7 @@ int RGWRados::check_disk_state(const DoutPrefixProvider *dpp,
        * non-bad ways this could happen (there probably are, but annoying
        * to handle!) */
     }
+
     // encode a suggested removal of that key
     list_state.ver.epoch = io_ctx.get_last_version();
     list_state.ver.pool = io_ctx.get_id();
@@ -8963,6 +8988,7 @@ int RGWRados::check_disk_state(const DoutPrefixProvider *dpp,
 
   string etag;
   string content_type;
+  string storage_class;
   ACLOwner owner;
 
   object.meta.size = astate->size;
@@ -8976,6 +9002,10 @@ int RGWRados::check_disk_state(const DoutPrefixProvider *dpp,
   iter = astate->attrset.find(RGW_ATTR_CONTENT_TYPE);
   if (iter != astate->attrset.end()) {
     content_type = rgw_bl_str(iter->second);
+  }
+  iter = astate->attrset.find(RGW_ATTR_STORAGE_CLASS);
+  if (iter != astate->attrset.end()) {
+    storage_class = rgw_bl_str(iter->second);
   }
   iter = astate->attrset.find(RGW_ATTR_ACL);
   if (iter != astate->attrset.end()) {
@@ -9005,20 +9035,34 @@ int RGWRados::check_disk_state(const DoutPrefixProvider *dpp,
 
   object.meta.etag = etag;
   object.meta.content_type = content_type;
+  object.meta.storage_class = storage_class;
   object.meta.owner = owner.get_id().to_str();
   object.meta.owner_display_name = owner.get_display_name();
 
   // encode suggested updates
-  list_state.ver.pool = io_ctx.get_id();
-  list_state.ver.epoch = astate->epoch;
+
   list_state.meta.size = object.meta.size;
   list_state.meta.accounted_size = object.meta.accounted_size;
   list_state.meta.mtime = object.meta.mtime;
   list_state.meta.category = main_category;
   list_state.meta.etag = etag;
   list_state.meta.content_type = content_type;
-  if (astate->obj_tag.length() > 0)
+  list_state.meta.storage_class = storage_class;
+
+  librados::IoCtx head_obj_ctx; // initialize to data pool so we can get pool id
+  r = get_obj_head_ioctx(dpp, bucket_info, obj, &head_obj_ctx);
+  if (r < 0) {
+    ldpp_dout(dpp, 0) << __func__ <<
+      " WARNING: unable to find head object data pool for \"" <<
+      obj << "\", not updating version pool/epoch" << dendl;
+  } else {
+    list_state.ver.pool = head_obj_ctx.get_id();
+    list_state.ver.epoch = astate->epoch;
+  }
+
+  if (astate->obj_tag.length() > 0) {
     list_state.tag = astate->obj_tag.c_str();
+  }
   list_state.meta.owner = owner.get_id().to_str();
   list_state.meta.owner_display_name = owner.get_display_name();
 

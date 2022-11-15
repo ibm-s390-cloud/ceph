@@ -2544,6 +2544,52 @@ static int _get_pg_num(Rados& cluster, string pool_name)
   return -1;
 }
 
+int make_hitset(Rados& cluster, librados::IoCtx& cache_ioctx, int num_pg, 
+    int num, std::map<int, HitSet>& hitsets, std::string& cache_pool_name) 
+{
+  int pg = num_pg;
+  // do a bunch of writes
+  for (int i=0; i<num; ++i) {
+    bufferlist bl;
+    bl.append("a");
+    ceph_assert(0 == cache_ioctx.write(stringify(i), bl, 1, 0));
+  }
+
+  // get HitSets
+  for (int i=0; i<pg; ++i) {
+    list< pair<time_t,time_t> > ls;
+    AioCompletion *c = librados::Rados::aio_create_completion();
+    ceph_assert(0 == cache_ioctx.hit_set_list(i, c, &ls));
+    c->wait_for_complete();
+    c->release();
+    std::cout << "pg " << i << " ls " << ls << std::endl;
+    ceph_assert(!ls.empty());
+
+    // get the latest
+    c = librados::Rados::aio_create_completion();
+    bufferlist bl;
+    ceph_assert(0 == cache_ioctx.hit_set_get(i, c, ls.back().first, &bl));
+    c->wait_for_complete();
+    c->release();
+
+    try {
+      auto p = bl.cbegin();
+      decode(hitsets[i], p);
+    }
+    catch (buffer::error& e) {
+      std::cout << "failed to decode hit set; bl len is " << bl.length() << "\n";
+      bl.hexdump(std::cout);
+      std::cout << std::endl;
+      throw e;
+    }
+
+    // cope with racing splits by refreshing pg_num
+    if (i == pg - 1)
+      pg = _get_pg_num(cluster, cache_pool_name);
+  }
+  return pg;
+}
+
 TEST_F(LibRadosTwoPoolsPP, HitSetWrite) {
   int num_pg = _get_pg_num(cluster, pool_name);
   ceph_assert(num_pg > 0);
@@ -2572,46 +2618,11 @@ TEST_F(LibRadosTwoPoolsPP, HitSetWrite) {
 
   int num = 200;
 
-  // do a bunch of writes
-  for (int i=0; i<num; ++i) {
-    bufferlist bl;
-    bl.append("a");
-    ASSERT_EQ(0, cache_ioctx.write(stringify(i), bl, 1, 0));
-  }
-
-  // get HitSets
   std::map<int,HitSet> hitsets;
-  for (int i=0; i<num_pg; ++i) {
-    list< pair<time_t,time_t> > ls;
-    AioCompletion *c = librados::Rados::aio_create_completion();
-    ASSERT_EQ(0, cache_ioctx.hit_set_list(i, c, &ls));
-    c->wait_for_complete();
-    c->release();
-    std::cout << "pg " << i << " ls " << ls << std::endl;
-    ASSERT_FALSE(ls.empty());
 
-    // get the latest
-    c = librados::Rados::aio_create_completion();
-    bufferlist bl;
-    ASSERT_EQ(0, cache_ioctx.hit_set_get(i, c, ls.back().first, &bl));
-    c->wait_for_complete();
-    c->release();
+  num_pg = make_hitset(cluster, cache_ioctx, num_pg, num, hitsets, cache_pool_name);
 
-    try {
-      auto p = bl.cbegin();
-      decode(hitsets[i], p);
-    }
-    catch (buffer::error& e) {
-      std::cout << "failed to decode hit set; bl len is " << bl.length() << "\n";
-      bl.hexdump(std::cout);
-      std::cout << std::endl;
-      throw e;
-    }
-
-    // cope with racing splits by refreshing pg_num
-    if (i == num_pg - 1)
-      num_pg = _get_pg_num(cluster, cache_pool_name);
-  }
+  int retry = 0;
 
   for (int i=0; i<num; ++i) {
     string n = stringify(i);
@@ -2626,6 +2637,12 @@ TEST_F(LibRadosTwoPoolsPP, HitSetWrite) {
 	found = true;
 	break;
       }
+    }
+    if (!found && retry < 5) {
+      num_pg = make_hitset(cluster, cache_ioctx, num_pg, num, hitsets, cache_pool_name);
+      i--;
+      retry++;
+      continue;
     }
     ASSERT_TRUE(found);
   }
@@ -5437,6 +5454,9 @@ TEST_F(LibRadosTwoPoolsPP, TierFlushDuringFlush) {
     ASSERT_EQ(0, ioctx.operate("bar", &op));
   }
 
+  // wait for maps to settle
+  cluster.wait_for_latest_osdmap();
+
   // set-chunk to set manifest object
   {
     ObjectReadOperation op;
@@ -5452,6 +5472,9 @@ TEST_F(LibRadosTwoPoolsPP, TierFlushDuringFlush) {
 
   // delete temp pool, so flushing chunk will fail
   ASSERT_EQ(0, s_cluster.pool_delete(temp_pool_name.c_str()));
+
+  // wait for maps to settle
+  cluster.wait_for_latest_osdmap();
 
   // flush to check if proper error is returned
   {
@@ -8593,3 +8616,68 @@ TEST_F(LibRadosTwoPoolsPP, HelloWriteReturn) {
     ASSERT_EQ("", std::string(out.c_str(), out.length()));
   }
 }
+
+TEST_F(LibRadosTwoPoolsPP, TierFlushDuringUnsetDedupTier) {
+  // skip test if not yet octopus
+  if (_get_required_osd_release(cluster) < "octopus") {
+    cout << "cluster is not yet octopus, skipping test" << std::endl;
+    return;
+  }
+
+  bufferlist inbl;
+
+  // set dedup parameters without dedup_tier
+  ASSERT_EQ(0, cluster.mon_command(
+    set_pool_str(cache_pool_name, "fingerprint_algorithm", "sha1"),
+    inbl, NULL, NULL));
+  ASSERT_EQ(0, cluster.mon_command(
+    set_pool_str(cache_pool_name, "dedup_chunk_algorithm", "fastcdc"),
+    inbl, NULL, NULL));
+  ASSERT_EQ(0, cluster.mon_command(
+    set_pool_str(cache_pool_name, "dedup_cdc_chunk_size", 1024),
+    inbl, NULL, NULL));
+
+  // create object
+  bufferlist gbl;
+  {
+    generate_buffer(1024*8, &gbl);
+    ObjectWriteOperation op;
+    op.write_full(gbl);
+    ASSERT_EQ(0, cache_ioctx.operate("foo", &op));
+  }
+  {
+    bufferlist bl;
+    bl.append("there hiHI");
+    ObjectWriteOperation op;
+    op.write_full(bl);
+    ASSERT_EQ(0, ioctx.operate("bar", &op));
+  }
+
+  // wait for maps to settle
+  cluster.wait_for_latest_osdmap();
+
+  // set-chunk to set manifest object
+  {
+    ObjectReadOperation op;
+    op.set_chunk(0, 2, ioctx, "bar", 0, CEPH_OSD_OP_FLAG_WITH_REFERENCE);
+    librados::AioCompletion *completion = cluster.aio_create_completion();
+    ASSERT_EQ(0, cache_ioctx.aio_operate("foo", completion, &op,
+      librados::OPERATION_IGNORE_CACHE, NULL));
+    completion->wait_for_complete();
+    ASSERT_EQ(0, completion->get_return_value());
+    completion->release();
+  }
+
+  // flush to check if proper error is returned
+  {
+    ObjectReadOperation op;
+    op.tier_flush();
+    librados::AioCompletion *completion = cluster.aio_create_completion();
+    ASSERT_EQ(0, cache_ioctx.aio_operate(
+      "foo", completion, &op, librados::OPERATION_IGNORE_CACHE, NULL));
+    completion->wait_for_complete();
+    ASSERT_EQ(-EINVAL, completion->get_return_value());
+    completion->release();
+  }
+}
+

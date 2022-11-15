@@ -660,7 +660,7 @@ class CephFSMount(object):
 
     def run_shell(self, args, timeout=900, **kwargs):
         args = args.split() if isinstance(args, str) else args
-        kwargs.pop('omit_sudo', False)
+        omit_sudo = kwargs.pop('omit_sudo', False)
         sudo = kwargs.pop('sudo', False)
         cwd = kwargs.pop('cwd', self.mountpoint)
         stdout = kwargs.pop('stdout', StringIO())
@@ -669,7 +669,9 @@ class CephFSMount(object):
         if sudo:
             args.insert(0, 'sudo')
 
-        return self.client_remote.run(args=args, cwd=cwd, timeout=timeout, stdout=stdout, stderr=stderr, **kwargs)
+        return self.client_remote.run(args=args, cwd=cwd, timeout=timeout,
+                                      stdout=stdout, stderr=stderr,
+                                      omit_sudo=omit_sudo, **kwargs)
 
     def run_shell_payload(self, payload, **kwargs):
         return self.run_shell(["bash", "-c", Raw(f"'{payload}'")], **kwargs)
@@ -796,6 +798,31 @@ class CephFSMount(object):
         # This wait would not be sufficient if the file had already
         # existed, but it's simple and in practice users of open_background
         # are not using it on existing files.
+        self.wait_for_visible(basename)
+
+        return rproc
+
+    def open_dir_background(self, basename):
+        """
+        Create and hold a capability to a directory.
+        """
+        assert(self.is_mounted())
+
+        path = os.path.join(self.hostfs_mntpt, basename)
+
+        pyscript = dedent("""
+            import time
+            import os
+
+            os.mkdir("{path}")
+            fd = os.open("{path}", os.O_RDONLY)
+            while True:
+                time.sleep(1)
+            """).format(path=path)
+
+        rproc = self._run_python(pyscript)
+        self.background_procs.append(rproc)
+
         self.wait_for_visible(basename)
 
         return rproc
@@ -1027,30 +1054,49 @@ class CephFSMount(object):
         self.background_procs.append(rproc)
         return rproc
 
-    def create_n_files(self, fs_path, count, sync=False):
+    def create_n_files(self, fs_path, count, sync=False, dirsync=False, unlink=False, finaldirsync=False):
+        """
+        Create n files.
+
+        :param sync: sync the file after writing
+        :param dirsync: sync the containing directory after closing the file
+        :param unlink: unlink the file after closing
+        :param finaldirsync: sync the containing directory after closing the last file
+        """
+
         assert(self.is_mounted())
 
         abs_path = os.path.join(self.hostfs_mntpt, fs_path)
 
-        pyscript = dedent("""
-            import sys
-            import time
+        pyscript = dedent(f"""
             import os
 
             n = {count}
-            abs_path = "{abs_path}"
+            path = "{abs_path}"
 
-            if not os.path.exists(os.path.dirname(abs_path)):
-                os.makedirs(os.path.dirname(abs_path))
+            dpath = os.path.dirname(path)
+            fnameprefix = os.path.basename(path)
+            os.makedirs(dpath, exist_ok=True)
 
-            for i in range(0, n):
-                fname = "{{0}}_{{1}}".format(abs_path, i)
-                with open(fname, 'w') as f:
-                    f.write('content')
-                    if {sync}:
-                        f.flush()
-                        os.fsync(f.fileno())
-            """).format(abs_path=abs_path, count=count, sync=str(sync))
+            try:
+                dirfd = os.open(dpath, os.O_DIRECTORY)
+
+                for i in range(n):
+                    fpath = os.path.join(dpath, f"{{fnameprefix}}_{{i}}")
+                    with open(fpath, 'w') as f:
+                        f.write(f"{{i}}")
+                        if {sync}:
+                            f.flush()
+                            os.fsync(f.fileno())
+                    if {unlink}:
+                        os.unlink(fpath)
+                    if {dirsync}:
+                        os.fsync(dirfd)
+                if {finaldirsync}:
+                    os.fsync(dirfd)
+            finally:
+                os.close(dirfd)
+            """)
 
         self.run_python(pyscript)
 

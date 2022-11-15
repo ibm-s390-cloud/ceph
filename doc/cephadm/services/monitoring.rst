@@ -195,6 +195,7 @@ set``:
 - ``services/grafana/ceph-dashboard.yml``
 - ``services/grafana/grafana.ini``
 - ``services/prometheus/prometheus.yml``
+- ``services/prometheus/alerting/custom_alerts.yml``
 
 You can look up the file templates that are currently used by cephadm in
 ``src/pybind/mgr/cephadm/templates``:
@@ -240,6 +241,15 @@ Example
   # reconfig the prometheus service
   ceph orch reconfig prometheus
 
+.. code-block:: bash
+
+  # set additional custom alerting rules for Prometheus
+  ceph config-key set mgr/cephadm/services/prometheus/alerting/custom_alerts.yml \
+    -i $PWD/custom_alerts.yml
+
+  # Note that custom alerting rules are not parsed by Jinja and hence escaping
+  # will not be an issue.
+
 Deploying monitoring without cephadm
 ------------------------------------
 
@@ -281,6 +291,32 @@ Setting up RBD-Image monitoring
 Due to performance reasons, monitoring of RBD images is disabled by default. For more information please see
 :ref:`prometheus-rbd-io-statistics`. If disabled, the overview and details dashboards will stay empty in Grafana
 and the metrics will not be visible in Prometheus.
+
+Setting up Prometheus
+-----------------------
+
+Setting Prometheus Retention Time
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Cephadm provides the option to set the Prometheus TDSB retention time using
+a ``retention_time`` field in the Prometheus service spec. The value defaults
+to 15 days (15d). If you would like a different value, such as 1 year (1y) you
+can apply a service spec similar to:
+
+.. code-block:: yaml
+
+    service_type: prometheus
+    placement:
+      count: 1
+    spec:
+      retention_time: "1y"
+
+.. note::
+
+  If you already had Prometheus daemon(s) deployed before and are updating an
+  existent spec as opposed to doing a fresh Prometheus deployment, you must also
+  tell cephadm to redeploy the Prometheus daemon(s) to put this change into effect.
+  This can be done with a ``ceph orch redeploy prometheus`` command.
 
 Setting up Grafana
 ------------------
@@ -386,6 +422,26 @@ Where ``default_webhook_urls`` is a list of additional URLs that are
 added to the default receivers' ``<webhook_configs>`` configuration.
 
 Run ``reconfig`` on the service to update its configuration:
+
+.. prompt:: bash #
+
+  ceph orch reconfig alertmanager
+
+Turn on Certificate Validation
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+If you are using certificates for alertmanager and want to make sure
+these certs are verified, you should set the "secure" option to
+true in your alertmanager spec (this defaults to false).
+
+.. code-block:: yaml
+
+    service_type: alertmanager
+    spec:
+      secure: true
+
+If you already had alertmanager daemons running before applying the spec
+you must reconfigure them to update their configuration
 
 .. prompt:: bash #
 

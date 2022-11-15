@@ -253,7 +253,7 @@ Commands
   Show the rbd images that are mapped via the rbd kernel module
   (default) or other supported device.
 
-:command:`device map` [-t | --device-type *device-type*] [--read-only] [--exclusive] [-o | --options *device-options*] *image-spec* | *snap-spec*
+:command:`device map` [-t | --device-type *device-type*] [--cookie *device-cookie*] [--show-cookie] [--read-only] [--exclusive] [-o | --options *device-options*] *image-spec* | *snap-spec*
   Map the specified image to a block device via the rbd kernel module
   (default) or other supported device (*nbd* on Linux or *ggate* on
   FreeBSD).
@@ -264,6 +264,22 @@ Commands
 :command:`device unmap` [-t | --device-type *device-type*] [-o | --options *device-options*] *image-spec* | *snap-spec* | *device-path*
   Unmap the block device that was mapped via the rbd kernel module
   (default) or other supported device.
+
+  The --options argument is a comma separated list of device type
+  specific options (opt1,opt2=val,...).
+
+:command:`device attach` [-t | --device-type *device-type*] --device *device-path* [--cookie *device-cookie*] [--show-cookie] [--read-only] [--exclusive] [--force] [-o | --options *device-options*] *image-spec* | *snap-spec*
+  Attach the specified image to the specified block device (currently only
+  `nbd` on Linux). This operation is unsafe and should not be normally used.
+  In particular, specifying the wrong image or the wrong block device may
+  lead to data corruption as no validation is performed by `nbd` kernel driver.
+
+  The --options argument is a comma separated list of device type
+  specific options (opt1,opt2=val,...).
+
+:command:`device detach` [-t | --device-type *device-type*] [-o | --options *device-options*] *image-spec* | *snap-spec* | *device-path*
+  Detach the block device that was mapped or attached (currently only `nbd`
+  on Linux). This operation is unsafe and should not be normally used.
 
   The --options argument is a comma separated list of device type
   specific options (opt1,opt2=val,...).
@@ -809,7 +825,8 @@ Per mapping (block device) `rbd device map` options:
 * alloc_size - Minimum allocation unit of the underlying OSD object store
   backend (since 5.1, default is 64K bytes).  This is used to round off and
   drop discards that are too small.  For bluestore, the recommended setting is
-  bluestore_min_alloc_size (typically 64K for hard disk drives and 16K for
+  bluestore_min_alloc_size (currently set to 4K for all types of drives,
+  previously used to be set to 64K for hard disk drives and 16K for
   solid-state drives).  For filestore with filestore_punch_hole = false, the
   recommended setting is image object size (typically 4M).
 

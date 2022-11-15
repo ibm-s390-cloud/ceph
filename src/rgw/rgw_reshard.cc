@@ -347,15 +347,15 @@ static int create_new_bucket_instance(rgw::sal::RGWRadosStore *store,
   new_bucket_info.new_bucket_instance_id.clear();
   new_bucket_info.reshard_status = cls_rgw_reshard_status::NOT_RESHARDING;
 
-  int ret = store->svc()->bi->init_index(dpp, new_bucket_info);
+  int ret = store->getRados()->put_bucket_instance_info(new_bucket_info, true, real_time(), &attrs, dpp);
   if (ret < 0) {
-    cerr << "ERROR: failed to init new bucket indexes: " << cpp_strerror(-ret) << std::endl;
+    cerr << "ERROR: failed to store new bucket instance info: " << cpp_strerror(-ret) << std::endl;
     return ret;
   }
 
-  ret = store->getRados()->put_bucket_instance_info(new_bucket_info, true, real_time(), &attrs, dpp);
+  ret = store->svc()->bi->init_index(dpp, new_bucket_info);
   if (ret < 0) {
-    cerr << "ERROR: failed to store new bucket instance info: " << cpp_strerror(-ret) << std::endl;
+    cerr << "ERROR: failed to init new bucket indexes: " << cpp_strerror(-ret) << std::endl;
     return ret;
   }
 
@@ -626,6 +626,13 @@ int RGWBucketReshard::do_reshard(int num_shards,
 	rgw_bucket_category_stats stats;
 	bool account = entry.get_info(&cls_key, &category, &stats);
 	rgw_obj_key key(cls_key);
+        if (entry.type == BIIndexType::OLH && key.empty()) {
+	  // bogus entry created by https://tracker.ceph.com/issues/46456
+	  // to fix, skip so it doesn't get include in the new bucket instance
+	  total_entries--;
+	  ldpp_dout(dpp, 10) << "Dropping entry with empty name, idx=" << marker << dendl;
+	  continue;
+	}
 	rgw_obj obj(new_bucket_info.bucket, key);
 	RGWMPObj mp;
 	if (key.ns == RGW_OBJ_NS_MULTIPART && mp.from_meta(key.name)) {

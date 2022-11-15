@@ -69,6 +69,7 @@ class CephadmServe:
         self.mgr.config_checker.load_network_config()
 
         while self.mgr.run:
+            self.log.debug("serve loop start")
 
             try:
 
@@ -111,7 +112,9 @@ class CephadmServe:
                 if e.event_subject:
                     self.mgr.events.from_orch_error(e)
 
+            self.log.debug("serve loop sleep")
             self._serve_sleep()
+            self.log.debug("serve loop wake")
         self.log.debug("serve exit")
 
     def _serve_sleep(self) -> None:
@@ -129,6 +132,7 @@ class CephadmServe:
         self.mgr.event.clear()
 
     def _update_paused_health(self) -> None:
+        self.log.debug('_update_paused_health')
         if self.mgr.paused:
             self.mgr.set_health_warning('CEPHADM_PAUSED', 'cephadm background work is paused', 1, ["'ceph orch resume' to resume"])
         else:
@@ -163,7 +167,7 @@ class CephadmServe:
                 )
                 ret, out, err = self.mgr.mon_command({
                     'prefix': 'config set',
-                    'who': f'osd/host:{host}',
+                    'who': f'osd/host:{host.split(".")[0]}',
                     'name': 'osd_memory_target',
                     'value': str(val),
                 })
@@ -172,14 +176,19 @@ class CephadmServe:
                         f'Unable to set osd_memory_target on {host} to {val}: {err}'
                     )
         else:
-            self.mgr.check_mon_command({
-                'prefix': 'config rm',
-                'who': f'osd/host:{host}',
-                'name': 'osd_memory_target',
-            })
+            # if osd memory autotuning is off, we don't want to remove these config
+            # options as users may be using them. Since there is no way to set autotuning
+            # on/off at a host level, best we can do is check if it is globally on.
+            if self.mgr.get_foreign_ceph_option('osd', 'osd_memory_target_autotune'):
+                self.mgr.check_mon_command({
+                    'prefix': 'config rm',
+                    'who': f'osd/host:{host.split(".")[0]}',
+                    'name': 'osd_memory_target',
+                })
         self.mgr.cache.update_autotune(host)
 
     def _refresh_hosts_and_daemons(self) -> None:
+        self.log.debug('_refresh_hosts_and_daemons')
         bad_hosts = []
         failures = []
 
@@ -320,6 +329,7 @@ class CephadmServe:
             sd.memory_usage = d.get('memory_usage')
             sd.memory_request = d.get('memory_request')
             sd.memory_limit = d.get('memory_limit')
+            sd.cpu_percentage = d.get('cpu_percentage')
             sd._service_name = d.get('service_name')
             sd.deployed_by = d.get('deployed_by')
             sd.version = d.get('version')
@@ -468,6 +478,7 @@ class CephadmServe:
                     'CEPHADM_STRAY_DAEMON', f'{len(daemon_detail)} stray daemon(s) not managed by cephadm', len(daemon_detail), daemon_detail)
 
     def _check_for_moved_osds(self) -> None:
+        self.log.debug('_check_for_moved_osds')
         all_osds: DefaultDict[int, List[orchestrator.DaemonDescription]] = defaultdict(list)
         for dd in self.mgr.cache.get_daemons_by_type('osd'):
             assert dd.daemon_id
@@ -495,6 +506,7 @@ class CephadmServe:
                     logger.exception(f'failed to remove duplicated daemon {e}')
 
     def _apply_all_services(self) -> bool:
+        self.log.debug('_apply_all_services')
         r = False
         specs = []  # type: List[ServiceSpec]
         for sn, spec in self.mgr.spec_store.active_specs.items():
@@ -518,7 +530,7 @@ class CephadmServe:
                                             f"Failed to apply {len(self.mgr.apply_spec_fails)} service(s): {','.join(x[0] for x in self.mgr.apply_spec_fails)}",
                                             len(self.mgr.apply_spec_fails),
                                             warnings)
-
+        self.mgr.update_watched_hosts()
         return r
 
     def _apply_service_config(self, spec: ServiceSpec) -> None:
@@ -688,7 +700,7 @@ class CephadmServe:
                 slot = slot.assign_name(self.mgr.get_unique_name(
                     slot.daemon_type,
                     slot.hostname,
-                    daemons,
+                    [d for d in daemons if d not in daemons_to_remove],
                     prefix=spec.service_id,
                     forcename=slot.name,
                     rank=slot.rank,
@@ -718,18 +730,20 @@ class CephadmServe:
             # create daemons
             daemon_place_fails = []
             for slot in slots_to_add:
-                # first remove daemon on conflicting port?
-                if slot.ports:
+                # first remove daemon with conflicting port or name?
+                if slot.ports or slot.name in [d.name() for d in daemons_to_remove]:
                     for d in daemons_to_remove:
-                        if d.hostname != slot.hostname:
+                        if (
+                            d.hostname != slot.hostname
+                            or not (set(d.ports or []) & set(slot.ports))
+                            or (d.ip and slot.ip and d.ip != slot.ip)
+                            and d.name() != slot.name
+                        ):
                             continue
-                        if not (set(d.ports or []) & set(slot.ports)):
-                            continue
-                        if d.ip and slot.ip and d.ip != slot.ip:
-                            continue
-                        self.log.info(
-                            f'Removing {d.name()} before deploying to {slot} to avoid a port conflict'
-                        )
+                        if d.name() != slot.name:
+                            self.log.info(
+                                f'Removing {d.name()} before deploying to {slot} to avoid a port or conflict'
+                            )
                         # NOTE: we don't check ok-to-stop here to avoid starvation if
                         # there is only 1 gateway.
                         self._remove_daemon(d.name(), d.hostname)
@@ -785,6 +799,14 @@ class CephadmServe:
             if daemon_place_fails:
                 self.mgr.set_health_warning('CEPHADM_DAEMON_PLACE_FAIL', f'Failed to place {len(daemon_place_fails)} daemon(s)', len(daemon_place_fails), daemon_place_fails)
 
+            if service_type == 'mgr':
+                active_mgr = svc.get_active_daemon(self.mgr.cache.get_daemons_by_type('mgr'))
+                if active_mgr.daemon_id in [d.daemon_id for d in daemons_to_remove]:
+                    # We can't just remove the active mgr like any other daemon.
+                    # Need to fail over later so it can be removed on next pass.
+                    # This can be accomplished by scheduling a restart of the active mgr.
+                    self.mgr._schedule_daemon_action(active_mgr.name(), 'restart')
+
             # remove any?
             def _ok_to_stop(remove_daemons: List[orchestrator.DaemonDescription]) -> bool:
                 daemon_ids = [d.daemon_id for d in remove_daemons]
@@ -814,7 +836,7 @@ class CephadmServe:
         return r
 
     def _check_daemons(self) -> None:
-
+        self.log.debug('_check_daemons')
         daemons = self.mgr.cache.get_daemons()
         daemons_post: Dict[str, List[orchestrator.DaemonDescription]] = defaultdict(list)
         for dd in daemons:
@@ -910,6 +932,7 @@ class CephadmServe:
                     daemon_type)).daemon_check_post(daemon_descs)
 
     def _purge_deleted_services(self) -> None:
+        self.log.debug('_purge_deleted_services')
         existing_services = self.mgr.spec_store.all_specs.items()
         for service_name, spec in list(existing_services):
             if service_name not in self.mgr.spec_store.spec_deleted:
@@ -1024,6 +1047,8 @@ class CephadmServe:
             self.mgr.cache.update_client_file(host, path, digest, mode, uid, gid)
             updated_files = True
         for path in old_files.keys():
+            if path == '/etc/ceph/ceph.conf':
+                continue
             self.log.info(f'Removing {host}:{path}')
             with self._remote_connection(host) as tpl:
                 conn, connr = tpl
@@ -1165,11 +1190,15 @@ class CephadmServe:
         with set_exception_subject('service', daemon.service_id(), overwrite=True):
 
             self.mgr.cephadm_services[daemon_type_to_service(daemon_type)].pre_remove(daemon)
-
             # NOTE: we are passing the 'force' flag here, which means
             # we can delete a mon instances data.
-            args = ['--name', name, '--force']
-            self.log.info('Removing daemon %s from %s' % (name, host))
+            dd = self.mgr.cache.get_daemon(daemon.daemon_name)
+            if dd.ports:
+                args = ['--name', name, '--force', '--tcp-ports', ' '.join(map(str, dd.ports))]
+            else:
+                args = ['--name', name, '--force']
+
+            self.log.info('Removing daemon %s from %s -- ports %s' % (name, host, dd.ports))
             out, err, code = self._run_cephadm(
                 host, name, 'rm-daemon', args)
             if not code:
@@ -1265,7 +1294,15 @@ class CephadmServe:
                 if stdin:
                     self.log.debug('stdin: %s' % stdin)
 
-                python = connr.choose_python()
+                try:
+                    # if host has gone offline this is likely where we'll fail first
+                    python = connr.choose_python()
+                except RuntimeError as e:
+                    self.mgr.offline_hosts.add(host)
+                    self.mgr._reset_con(host)
+                    if error_ok:
+                        return [], [str(e)], 1
+                    raise
                 if not python:
                     raise RuntimeError(
                         'unable to find python on %s (tried %s in %s)' % (

@@ -1114,7 +1114,13 @@ class MgrModule(ceph_module.BaseMgrModule, MgrModuleLoggingMixin):
 
     def _perfpath_to_path_labels(self, daemon: str,
                                  path: str) -> Tuple[str, Tuple[str, ...], Tuple[str, ...]]:
-        label_names = ("ceph_daemon",)  # type: Tuple[str, ...]
+        if daemon.startswith('rgw.'):
+            label_name = 'instance_id'
+            daemon = daemon[len('rgw.'):]
+        else:
+            label_name = 'ceph_daemon'
+
+        label_names = (label_name,)  # type: Tuple[str, ...]
         labels = (daemon,)  # type: Tuple[str, ...]
 
         if daemon.startswith('rbd-mirror.'):
@@ -1942,6 +1948,13 @@ class MgrModule(ceph_module.BaseMgrModule, MgrModuleLoggingMixin):
         return self._ceph_remove_mds_perf_query(query_id)
 
     @API.expose
+
+    def reregister_mds_perf_queries(self) -> None:
+        """
+        Re-register MDS perf queries.
+        """
+        return self._ceph_reregister_mds_perf_queries()
+
     def get_mds_perf_counters(self, query_id: int) -> Optional[Dict[str, List[PerfCounterT]]]:
         """
         Get stats collected for an MDS perf query.

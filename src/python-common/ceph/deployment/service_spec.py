@@ -314,28 +314,34 @@ class PlacementSpec(object):
         # type: (Optional[str]) -> PlacementSpec
         """
         A single integer is parsed as a count:
+
         >>> PlacementSpec.from_string('3')
         PlacementSpec(count=3)
 
         A list of names is parsed as host specifications:
+
         >>> PlacementSpec.from_string('host1 host2')
         PlacementSpec(hosts=[HostPlacementSpec(hostname='host1', network='', name=''), HostPlacemen\
 tSpec(hostname='host2', network='', name='')])
 
         You can also prefix the hosts with a count as follows:
+
         >>> PlacementSpec.from_string('2 host1 host2')
         PlacementSpec(count=2, hosts=[HostPlacementSpec(hostname='host1', network='', name=''), Hos\
 tPlacementSpec(hostname='host2', network='', name='')])
 
-        You can spefify labels using `label:<label>`
+        You can specify labels using `label:<label>`
+
         >>> PlacementSpec.from_string('label:mon')
         PlacementSpec(label='mon')
 
-        Labels als support a count:
+        Labels also support a count:
+
         >>> PlacementSpec.from_string('3 label:mon')
         PlacementSpec(count=3, label='mon')
 
         fnmatch is also supported:
+
         >>> PlacementSpec.from_string('data[1-3]')
         PlacementSpec(host_pattern='data[1-3]')
 
@@ -453,13 +459,14 @@ class ServiceSpec(object):
             'rgw': RGWSpec,
             'nfs': NFSServiceSpec,
             'osd': DriveGroupSpec,
+            'mds': MDSSpec,
             'iscsi': IscsiServiceSpec,
             'alertmanager': AlertManagerSpec,
             'ingress': IngressSpec,
             'container': CustomContainerSpec,
             'grafana': GrafanaSpec,
             'node-exporter': MonitoringSpec,
-            'prometheus': MonitoringSpec,
+            'prometheus': PrometheusSpec,
             'snmp-gateway': SNMPGatewaySpec,
         }.get(service_type, cls)
         if ret == ServiceSpec and not service_type:
@@ -680,7 +687,7 @@ class ServiceSpec(object):
                         f'Service of type \'{self.service_type}\' should not contain a service id')
 
         if self.service_id:
-            if not re.match('^[a-zA-Z0-9_.-]+$', self.service_id):
+            if not re.match('^[a-zA-Z0-9_.-]+$', str(self.service_id)):
                 raise SpecValidationError('Service id contains invalid characters, '
                                           'only [a-zA-Z0-9_.-] allowed')
 
@@ -928,12 +935,14 @@ class IngressSpec(ServiceSpec):
                  enable_stats: Optional[bool] = None,
                  keepalived_password: Optional[str] = None,
                  virtual_ip: Optional[str] = None,
+                 virtual_ips_list: Optional[List[str]] = None,
                  virtual_interface_networks: Optional[List[str]] = [],
                  unmanaged: bool = False,
                  ssl: bool = False,
                  extra_container_args: Optional[List[str]] = None,
                  ):
         assert service_type == 'ingress'
+
         super(IngressSpec, self).__init__(
             'ingress', service_id=service_id,
             placement=placement, config=config,
@@ -952,6 +961,7 @@ class IngressSpec(ServiceSpec):
         self.monitor_password = monitor_password
         self.keepalived_password = keepalived_password
         self.virtual_ip = virtual_ip
+        self.virtual_ips_list = virtual_ips_list
         self.virtual_interface_networks = virtual_interface_networks or []
         self.unmanaged = unmanaged
         self.ssl = ssl
@@ -975,9 +985,12 @@ class IngressSpec(ServiceSpec):
         if not self.monitor_port:
             raise SpecValidationError(
                 'Cannot add ingress: No monitor_port specified')
-        if not self.virtual_ip:
+        if not self.virtual_ip and not self.virtual_ips_list:
             raise SpecValidationError(
                 'Cannot add ingress: No virtual_ip provided')
+        if self.virtual_ip is not None and self.virtual_ips_list is not None:
+            raise SpecValidationError(
+                'Cannot add ingress: Single and multiple virtual IPs specified')
 
 
 yaml.add_representer(IngressSpec, ServiceSpec.yaml_representer)
@@ -1100,6 +1113,7 @@ class AlertManagerSpec(MonitoringSpec):
                  config: Optional[Dict[str, str]] = None,
                  networks: Optional[List[str]] = None,
                  port: Optional[int] = None,
+                 secure: bool = False,
                  extra_container_args: Optional[List[str]] = None,
                  ):
         assert service_type == 'alertmanager'
@@ -1124,6 +1138,7 @@ class AlertManagerSpec(MonitoringSpec):
         #                        added to the default receivers'
         #                        <webhook_configs> configuration.
         self.user_data = user_data or {}
+        self.secure = secure
 
     def get_port_start(self) -> List[int]:
         return [self.get_port(), 9094]
@@ -1163,6 +1178,32 @@ class GrafanaSpec(MonitoringSpec):
 
 
 yaml.add_representer(GrafanaSpec, ServiceSpec.yaml_representer)
+
+
+class PrometheusSpec(MonitoringSpec):
+    def __init__(self,
+                 service_type: str = 'prometheus',
+                 service_id: Optional[str] = None,
+                 placement: Optional[PlacementSpec] = None,
+                 unmanaged: bool = False,
+                 preview_only: bool = False,
+                 config: Optional[Dict[str, str]] = None,
+                 networks: Optional[List[str]] = None,
+                 port: Optional[int] = None,
+                 retention_time: Optional[str] = None,
+                 extra_container_args: Optional[List[str]] = None,
+                 ):
+        assert service_type == 'prometheus'
+        super(PrometheusSpec, self).__init__(
+            'prometheus', service_id=service_id,
+            placement=placement, unmanaged=unmanaged,
+            preview_only=preview_only, config=config, networks=networks, port=port,
+            extra_container_args=extra_container_args)
+
+        self.retention_time = retention_time
+
+
+yaml.add_representer(PrometheusSpec, ServiceSpec.yaml_representer)
 
 
 class SNMPGatewaySpec(ServiceSpec):
@@ -1313,3 +1354,31 @@ class SNMPGatewaySpec(ServiceSpec):
 
 
 yaml.add_representer(SNMPGatewaySpec, ServiceSpec.yaml_representer)
+
+
+class MDSSpec(ServiceSpec):
+    def __init__(self,
+                 service_type: str = 'mds',
+                 service_id: Optional[str] = None,
+                 placement: Optional[PlacementSpec] = None,
+                 config: Optional[Dict[str, str]] = None,
+                 unmanaged: bool = False,
+                 preview_only: bool = False,
+                 extra_container_args: Optional[List[str]] = None,
+                 ):
+        assert service_type == 'mds'
+        super(MDSSpec, self).__init__('mds', service_id=service_id,
+                                      placement=placement,
+                                      config=config,
+                                      unmanaged=unmanaged,
+                                      preview_only=preview_only,
+                                      extra_container_args=extra_container_args)
+
+    def validate(self) -> None:
+        super(MDSSpec, self).validate()
+
+        if str(self.service_id)[0].isdigit():
+            raise SpecValidationError('MDS service id cannot start with a numeric digit')
+
+
+yaml.add_representer(MDSSpec, ServiceSpec.yaml_representer)

@@ -264,18 +264,12 @@ class CephCluster(object):
             log.debug("_json_asok output empty")
             return None
 
-    def is_addr_blocklisted(self, addr=None):
-        if addr is None:
-            log.warn("Couldn't get the client address, so the blocklisted "
-                     "status undetermined")
-            return False
-
-        blocklist = json.loads(self.mon_manager.run_cluster_cmd(
-            args=["osd", "blocklist", "ls", "--format=json"],
-            stdout=StringIO()).stdout.getvalue())
-        for b in blocklist:
-            if addr == b["addr"]:
-                return True
+    def is_addr_blocklisted(self, addr):
+        blocklist = json.loads(self.mon_manager.raw_cluster_cmd(
+            "osd", "dump", "--format=json"))['blocklist']
+        if addr in blocklist:
+            return True
+        log.warn(f'The address {addr} is not blocklisted')
         return False
 
 
@@ -740,6 +734,11 @@ class Filesystem(MDSCluster):
     def run_client_payload(self, cmd):
         # avoid circular dep by importing here:
         from tasks.cephfs.fuse_mount import FuseMount
+
+        # Wait for at MDS daemons to be ready before mounting the
+        # ceph-fuse client in run_client_payload()
+        self.wait_for_daemons()
+
         d = misc.get_testdir(self._ctx)
         m = FuseMount(self._ctx, {}, d, "admin", self.client_remote, cephfs_name=self.name)
         m.mount_wait()

@@ -134,7 +134,7 @@ class Module(MgrModule):
             self.sleep_interval = 0.0
 
     def is_valid_daemon_name(self, who: str) -> bool:
-        parts = who.split('.')
+        parts = who.split('.', 1)
         if len(parts) != 2:
             return False
         return parts[0] in ('osd', 'mon')
@@ -278,6 +278,7 @@ class Module(MgrModule):
             'pool': self.pool_name,
             'pg_num': 1,
             'pg_num_min': 1,
+            'pg_num_max': 32,
         }), '')
         r, outb, outs = result.wait()
         assert r == 0

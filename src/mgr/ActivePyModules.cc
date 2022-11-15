@@ -74,7 +74,8 @@ void ActivePyModules::dump_server(const std::string &hostname,
   std::string ceph_version;
 
   for (const auto &[key, state] : dmc) {
-    without_gil([&ceph_version, state=state] {
+    std::string id;
+    without_gil([&ceph_version, &id, state=state] {
       std::lock_guard l(state->lock);
       // TODO: pick the highest version, and make sure that
       // somewhere else (during health reporting?) we are
@@ -83,10 +84,17 @@ void ActivePyModules::dump_server(const std::string &hostname,
       if (ver_iter != state->metadata.end()) {
         ceph_version = state->metadata.at("ceph_version");
       }
+      if (state->metadata.find("id") != state->metadata.end()) {
+        id = state->metadata.at("id");
+      }
     });
     f->open_object_section("service");
     f->dump_string("type", key.type);
     f->dump_string("id", key.name);
+    f->dump_string("ceph_version", ceph_version);
+    if (!id.empty()) {
+      f->dump_string("name", id);
+    }
     f->close_section();
   }
   f->close_section();
@@ -245,8 +253,6 @@ PyObject *ActivePyModules::get_python(const std::string &what)
     }
     f.close_section();
   } else if (what.substr(0, 6) == "config") {
-    without_gil_t no_gil;
-    with_gil_t with_gil{no_gil};
     if (what == "config_options") {
       g_conf().config_options(&f);
     } else if (what == "config") {
@@ -408,8 +414,6 @@ PyObject *ActivePyModules::get_python(const std::string &what)
       pg_map.dump_pool_stats(&f);
     });
   } else if (what == "pg_ready") {
-    without_gil_t no_gil;
-    with_gil_t with_gil{no_gil};
     server.dump_pg_ready(&f);
   } else if (what == "pg_progress") {
     without_gil_t no_gil;
@@ -432,9 +436,9 @@ PyObject *ActivePyModules::get_python(const std::string &what)
     });
   } else if (what == "osd_pool_stats") {
     int64_t poolid = -ENOENT;
+    without_gil_t no_gil;
     cluster_state.with_osdmap_and_pgmap([&](const OSDMap& osdmap,
 					    const PGMap& pg_map) {
-      without_gil_t no_gil;
       with_gil_t with_gil{no_gil};
       f.open_array_section("pool_stats");
       for (auto &p : osdmap.get_pools()) {
@@ -464,8 +468,6 @@ PyObject *ActivePyModules::get_python(const std::string &what)
     });
   } else if (what == "mgr_ips") {
     entity_addrvec_t myaddrs = server.get_myaddrs();
-    without_gil_t no_gil;
-    with_gil_t with_gil{no_gil};
     f.open_array_section("ips");
     std::set<std::string> did;
     for (auto& i : myaddrs.v) {
@@ -476,13 +478,11 @@ PyObject *ActivePyModules::get_python(const std::string &what)
     }
     f.close_section();
   } else if (what == "have_local_config_map") {
-    without_gil_t no_gil;
-    with_gil_t with_gil{no_gil};
     f.dump_bool("have_local_config_map", have_local_config_map);
   } else if (what == "active_clean_pgs"){
+    without_gil_t no_gil;
     cluster_state.with_pgmap(
         [&](const PGMap &pg_map) {
-      without_gil_t no_gil;
       with_gil_t with_gil{no_gil};
       f.open_array_section("pg_stats");
       for (auto &i : pg_map.pg_stat) {
@@ -504,12 +504,8 @@ PyObject *ActivePyModules::get_python(const std::string &what)
     });
   } else {
     derr << "Python module requested unknown data '" << what << "'" << dendl;
-    without_gil_t no_gil;
-    with_gil_t with_gil{no_gil};
     Py_RETURN_NONE;
   }
-  without_gil_t no_gil;
-  no_gil.acquire_gil();
   if(ttl_seconds) {
     return jf.get();
   } else {
@@ -1411,6 +1407,11 @@ void ActivePyModules::remove_mds_perf_query(MetricQueryID query_id)
   }
 }
 
+void ActivePyModules::reregister_mds_perf_queries()
+{
+  server.reregister_mds_perf_queries();
+}
+
 PyObject *ActivePyModules::get_mds_perf_counters(MetricQueryID query_id)
 {
   MDSPerfCollector collector(query_id);
@@ -1453,6 +1454,11 @@ PyObject *ActivePyModules::get_mds_perf_counters(MetricQueryID query_id)
     f.close_section(); // i
   }
   f.close_section(); // counters
+
+  f.open_array_section("last_updated");
+  f.dump_float("last_updated_mono", collector.last_updated_mono);
+  f.close_section(); // last_updated
+
   f.close_section(); // metrics
 
   return f.get();

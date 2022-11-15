@@ -16,7 +16,7 @@ except ImportError:
 from execnet.gateway_bootstrap import HostNotFound
 
 from ceph.deployment.service_spec import ServiceSpec, PlacementSpec, RGWSpec, \
-    NFSServiceSpec, IscsiServiceSpec, HostPlacementSpec, CustomContainerSpec
+    NFSServiceSpec, IscsiServiceSpec, HostPlacementSpec, CustomContainerSpec, MDSSpec
 from ceph.deployment.drive_selection.selector import DriveSelection
 from ceph.deployment.inventory import Devices, Device
 from ceph.utils import datetime_to_str, datetime_now
@@ -121,6 +121,8 @@ def with_osd_daemon(cephadm_module: CephadmOrchestrator, _run_cephadm, host: str
                   ['--name', f'osd.{osd_id}', '--meta-json', mock.ANY,
                    '--config-json', '-', '--osd-fsid', 'uuid'],
                   stdin=mock.ANY, image=''),
+        mock.call(host, 'osd', 'ceph-volume',
+                  ['--', 'raw', 'list', '--format', 'json'], no_fsid=False, image=''),
     ]
     dd = cephadm_module.cache.get_daemon(f'osd.{osd_id}', host=host)
     assert dd.name() == f'osd.{osd_id}'
@@ -160,12 +162,24 @@ class TestCephadm(object):
         assert wait(cephadm_module, cephadm_module.get_hosts()) == []
 
     @mock.patch("cephadm.serve.CephadmServe._run_cephadm", _run_cephadm('[]'))
+    @mock.patch("cephadm.utils.resolve_ip")
+    def test_re_add_host_receive_loopback(self, resolve_ip, cephadm_module):
+        resolve_ip.side_effect = ['192.168.122.1', '127.0.0.1', '127.0.0.1']
+        assert wait(cephadm_module, cephadm_module.get_hosts()) == []
+        cephadm_module._add_host(HostSpec('test', '192.168.122.1'))
+        assert wait(cephadm_module, cephadm_module.get_hosts()) == [HostSpec('test', '192.168.122.1')]
+        cephadm_module._add_host(HostSpec('test'))
+        assert wait(cephadm_module, cephadm_module.get_hosts()) == [HostSpec('test', '192.168.122.1')]
+        with pytest.raises(OrchestratorError):
+            cephadm_module._add_host(HostSpec('test2'))
+
+    @mock.patch("cephadm.serve.CephadmServe._run_cephadm", _run_cephadm('[]'))
     def test_service_ls(self, cephadm_module):
         with with_host(cephadm_module, 'test'):
             c = cephadm_module.list_daemons(refresh=True)
             assert wait(cephadm_module, c) == []
-            with with_service(cephadm_module, ServiceSpec('mds', 'name', unmanaged=True)) as _, \
-                    with_daemon(cephadm_module, ServiceSpec('mds', 'name'), 'test') as _:
+            with with_service(cephadm_module, MDSSpec('mds', 'name', unmanaged=True)) as _, \
+                    with_daemon(cephadm_module, MDSSpec('mds', 'name'), 'test') as _:
 
                 c = cephadm_module.list_daemons()
 
@@ -226,7 +240,7 @@ class TestCephadm(object):
             with with_host(cephadm_module, 'host2'):
                 with with_service(cephadm_module, ServiceSpec('mgr', placement=PlacementSpec(count=2)),
                                   CephadmOrchestrator.apply_mgr, '', status_running=True):
-                    with with_service(cephadm_module, ServiceSpec('mds', 'test-id', placement=PlacementSpec(count=2)),
+                    with with_service(cephadm_module, MDSSpec('mds', 'test-id', placement=PlacementSpec(count=2)),
                                       CephadmOrchestrator.apply_mds, '', status_running=True):
 
                         # with no service-type. Should provide info fot both services
@@ -744,8 +758,10 @@ class TestCephadm(object):
                 ['--config-json', '-', '--', 'lvm', 'batch',
                     '--no-auto', '/dev/sdb', '--yes', '--no-systemd'],
                 env_vars=['CEPH_VOLUME_OSDSPEC_AFFINITY=foo'], error_ok=True, stdin='{"config": "", "keyring": ""}')
-            _run_cephadm.assert_called_with(
+            _run_cephadm.assert_any_call(
                 'test', 'osd', 'ceph-volume', ['--', 'lvm', 'list', '--format', 'json'], image='', no_fsid=False)
+            _run_cephadm.assert_any_call(
+                'test', 'osd', 'ceph-volume', ['--', 'raw', 'list', '--format', 'json'], image='', no_fsid=False)
 
     @mock.patch("cephadm.serve.CephadmServe._run_cephadm")
     def test_apply_osd_save_non_collocated(self, _run_cephadm, cephadm_module: CephadmOrchestrator):
@@ -784,8 +800,10 @@ class TestCephadm(object):
                     '--wal-devices', '/dev/sdd', '--yes', '--no-systemd'],
                 env_vars=['CEPH_VOLUME_OSDSPEC_AFFINITY=noncollocated'],
                 error_ok=True, stdin='{"config": "", "keyring": ""}')
-            _run_cephadm.assert_called_with(
+            _run_cephadm.assert_any_call(
                 'test', 'osd', 'ceph-volume', ['--', 'lvm', 'list', '--format', 'json'], image='', no_fsid=False)
+            _run_cephadm.assert_any_call(
+                'test', 'osd', 'ceph-volume', ['--', 'raw', 'list', '--format', 'json'], image='', no_fsid=False)
 
     @mock.patch("cephadm.serve.CephadmServe._run_cephadm", _run_cephadm('{}'))
     @mock.patch("cephadm.module.SpecStore.save")
@@ -807,6 +825,11 @@ class TestCephadm(object):
             c = cephadm_module.create_osds(dg)
             out = wait(cephadm_module, c)
             assert out == "Created no osd(s) on host test; already created?"
+            bad_dg = DriveGroupSpec(placement=PlacementSpec(host_pattern='invalid_hsot'),
+                                    data_devices=DeviceSelection(paths=['']))
+            c = cephadm_module.create_osds(bad_dg)
+            out = wait(cephadm_module, c)
+            assert "Invalid 'host:device' spec: host not found in cluster" in out
 
     @mock.patch("cephadm.serve.CephadmServe._run_cephadm", _run_cephadm('{}'))
     def test_create_noncollocated_osd(self, cephadm_module):
@@ -851,29 +874,54 @@ class TestCephadm(object):
             assert isinstance(f1[1], DriveSelection)
 
     @pytest.mark.parametrize(
-        "devices, preview, exp_command",
+        "devices, preview, exp_commands",
         [
             # no preview and only one disk, prepare is used due the hack that is in place.
-            (['/dev/sda'], False, "lvm batch --no-auto /dev/sda --yes --no-systemd"),
+            (['/dev/sda'], False, ["lvm batch --no-auto /dev/sda --yes --no-systemd"]),
             # no preview and multiple disks, uses batch
             (['/dev/sda', '/dev/sdb'], False,
-             "CEPH_VOLUME_OSDSPEC_AFFINITY=test.spec lvm batch --no-auto /dev/sda /dev/sdb --yes --no-systemd"),
+             ["CEPH_VOLUME_OSDSPEC_AFFINITY=test.spec lvm batch --no-auto /dev/sda /dev/sdb --yes --no-systemd"]),
             # preview and only one disk needs to use batch again to generate the preview
-            (['/dev/sda'], True, "lvm batch --no-auto /dev/sda --yes --no-systemd --report --format json"),
+            (['/dev/sda'], True, ["lvm batch --no-auto /dev/sda --yes --no-systemd --report --format json"]),
             # preview and multiple disks work the same
             (['/dev/sda', '/dev/sdb'], True,
-             "CEPH_VOLUME_OSDSPEC_AFFINITY=test.spec lvm batch --no-auto /dev/sda /dev/sdb --yes --no-systemd --report --format json"),
+             ["CEPH_VOLUME_OSDSPEC_AFFINITY=test.spec lvm batch --no-auto /dev/sda /dev/sdb --yes --no-systemd --report --format json"]),
         ]
     )
     @mock.patch("cephadm.serve.CephadmServe._run_cephadm", _run_cephadm('{}'))
-    def test_driveselection_to_ceph_volume(self, cephadm_module, devices, preview, exp_command):
+    def test_driveselection_to_ceph_volume(self, cephadm_module, devices, preview, exp_commands):
         with with_host(cephadm_module, 'test'):
             dg = DriveGroupSpec(service_id='test.spec', placement=PlacementSpec(
                 host_pattern='test'), data_devices=DeviceSelection(paths=devices))
             ds = DriveSelection(dg, Devices([Device(path) for path in devices]))
             preview = preview
             out = cephadm_module.osd_service.driveselection_to_ceph_volume(ds, [], preview)
-            assert out in exp_command
+            assert all(any(cmd in exp_cmd for exp_cmd in exp_commands) for cmd in out), f'Expected cmds from f{out} in {exp_commands}'
+
+    @pytest.mark.parametrize(
+        "devices, preview, exp_commands",
+        [
+            # one data device, no preview
+            (['/dev/sda'], False, ["raw prepare --bluestore --data /dev/sda"]),
+            # multiple data devices, no preview
+            (['/dev/sda', '/dev/sdb'], False,
+             ["raw prepare --bluestore --data /dev/sda", "raw prepare --bluestore --data /dev/sdb"]),
+            # one data device, preview
+            (['/dev/sda'], True, ["raw prepare --bluestore --data /dev/sda --report --format json"]),
+            # multiple data devices, preview
+            (['/dev/sda', '/dev/sdb'], True,
+             ["raw prepare --bluestore --data /dev/sda --report --format json", "raw prepare --bluestore --data /dev/sdb --report --format json"]),
+        ]
+    )
+    @mock.patch("cephadm.serve.CephadmServe._run_cephadm", _run_cephadm('{}'))
+    def test_raw_driveselection_to_ceph_volume(self, cephadm_module, devices, preview, exp_commands):
+        with with_host(cephadm_module, 'test'):
+            dg = DriveGroupSpec(service_id='test.spec', method='raw', placement=PlacementSpec(
+                host_pattern='test'), data_devices=DeviceSelection(paths=devices))
+            ds = DriveSelection(dg, Devices([Device(path) for path in devices]))
+            preview = preview
+            out = cephadm_module.osd_service.driveselection_to_ceph_volume(ds, [], preview)
+            assert all(any(cmd in exp_cmd for exp_cmd in exp_commands) for cmd in out), f'Expected cmds from f{out} in {exp_commands}'
 
     @mock.patch("cephadm.serve.CephadmServe._run_cephadm", _run_cephadm(
         json.dumps([
@@ -1289,7 +1337,7 @@ class TestCephadm(object):
     @mock.patch("cephadm.serve.CephadmServe._deploy_cephadm_binary", _deploy_cephadm_binary('test'))
     @mock.patch("cephadm.serve.CephadmServe._run_cephadm", _run_cephadm('{}'))
     def test_mds_config_purge(self, cephadm_module: CephadmOrchestrator):
-        spec = ServiceSpec('mds', service_id='fsname')
+        spec = MDSSpec('mds', service_id='fsname', config={'test': 'foo'})
         with with_host(cephadm_module, 'test'):
             with with_service(cephadm_module, spec, host='test'):
                 ret, out, err = cephadm_module.check_mon_command({
@@ -1308,10 +1356,11 @@ class TestCephadm(object):
     @mock.patch("cephadm.serve.CephadmServe._run_cephadm", _run_cephadm('{}'))
     @mock.patch("cephadm.services.cephadmservice.CephadmService.ok_to_stop")
     def test_daemon_ok_to_stop(self, ok_to_stop, cephadm_module: CephadmOrchestrator):
-        spec = ServiceSpec(
+        spec = MDSSpec(
             'mds',
             service_id='fsname',
-            placement=PlacementSpec(hosts=['host1', 'host2'])
+            placement=PlacementSpec(hosts=['host1', 'host2']),
+            config={'test': 'foo'}
         )
         with with_host(cephadm_module, 'host1'), with_host(cephadm_module, 'host2'):
             c = cephadm_module.apply_mds(spec)

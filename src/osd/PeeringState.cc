@@ -1891,8 +1891,8 @@ public:
   }
   osd_id_t pop_osd() {
     ceph_assert(!is_empty());
-    auto ret = osds.back();
-    osds.pop_back();
+    auto ret = osds.front();
+    osds.pop_front();
     return ret.second;
   }
 
@@ -1901,7 +1901,7 @@ public:
 
   osd_ord_t get_ord() const {
     return osds.empty() ? std::make_tuple(false, eversion_t())
-      : osds.back().first;
+      : osds.front().first;
   }
 
   bool is_empty() const { return osds.empty(); }
@@ -3873,6 +3873,8 @@ std::optional<pg_stat_t> PeeringState::prepare_stats_for_publish(
   const object_stat_collection_t &unstable_stats)
 {
   if (info.stats.stats.sum.num_scrub_errors) {
+    psdout(10) << __func__ << " inconsistent due to " <<
+      info.stats.stats.sum.num_scrub_errors << " scrub errors" << dendl;
     state_set(PG_STATE_INCONSISTENT);
   } else {
     state_clear(PG_STATE_INCONSISTENT);
@@ -4232,6 +4234,8 @@ void PeeringState::append_log(
 
   psdout(10) << __func__ << " approx pg log length =  "
 	     << pg_log.get_log().approx_size() << dendl;
+  psdout(10) << __func__ << " dups pg log length =  "
+	     << pg_log.get_log().dups.size() << dendl;
   psdout(10) << __func__ << " transaction_applied = "
 	     << transaction_applied << dendl;
   if (!transaction_applied || async)

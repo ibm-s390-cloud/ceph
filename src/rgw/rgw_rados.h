@@ -461,6 +461,7 @@ class RGWRados
   // This field represents the number of bucket index object shards
   uint32_t bucket_index_max_shards;
 
+  int get_obj_head_ref(const DoutPrefixProvider *dpp, const rgw_placement_rule& target_placement_rule, const rgw_obj& obj, rgw_rados_ref *ref);
   int get_obj_head_ref(const DoutPrefixProvider *dpp, const RGWBucketInfo& bucket_info, const rgw_obj& obj, rgw_rados_ref *ref);
   int get_system_obj_ref(const DoutPrefixProvider *dpp, const rgw_raw_obj& obj, rgw_rados_ref *ref);
   uint64_t max_bucket_id;
@@ -717,6 +718,8 @@ public:
 
     bool bs_initialized;
 
+    const rgw_placement_rule *pmeta_placement_rule;
+
   protected:
     int get_state(const DoutPrefixProvider *dpp, RGWObjState **pstate, bool follow_olh, optional_yield y, bool assume_noent = false);
     void invalidate_state();
@@ -729,7 +732,8 @@ public:
     Object(RGWRados *_store, const RGWBucketInfo& _bucket_info, RGWObjectCtx& _ctx, const rgw_obj& _obj) : store(_store), bucket_info(_bucket_info),
                                                                                                ctx(_ctx), obj(_obj), bs(store),
                                                                                                state(NULL), versioning_disabled(false),
-                                                                                               bs_initialized(false) {}
+                                                                                               bs_initialized(false),
+                                                                                               pmeta_placement_rule(nullptr) {}
 
     RGWRados *get_store() { return store; }
     rgw_obj& get_obj() { return obj; }
@@ -756,6 +760,14 @@ public:
 
     bool versioning_enabled() {
       return (!versioning_disabled && bucket_info.versioning_enabled());
+    }
+
+    void set_meta_placement_rule(const rgw_placement_rule *p) {
+        pmeta_placement_rule = p;
+    }
+
+    const rgw_placement_rule& get_meta_placement_rule() {
+        return pmeta_placement_rule ? *pmeta_placement_rule : bucket_info.placement_rule;
     }
 
     struct Read {
@@ -1462,7 +1474,7 @@ public:
   int unlock(const rgw_pool& pool, const string& oid, rgw_zone_id& zone_id, string& owner_id);
 
   void update_gc_chain(const DoutPrefixProvider *dpp, rgw_obj& head_obj, RGWObjManifest& manifest, cls_rgw_obj_chain *chain);
-  int send_chain_to_gc(cls_rgw_obj_chain& chain, const string& tag);
+  std::tuple<int, std::optional<cls_rgw_obj_chain>> send_chain_to_gc(cls_rgw_obj_chain& chain, const std::string& tag);
   void delete_objs_inline(const DoutPrefixProvider *dpp, cls_rgw_obj_chain& chain, const string& tag);
   int gc_operate(const DoutPrefixProvider *dpp, string& oid, librados::ObjectWriteOperation *op);
   int gc_aio_operate(const std::string& oid, librados::AioCompletion *c,

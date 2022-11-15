@@ -310,6 +310,11 @@ int AtomicObjectProcessor::complete(size_t accounted_size,
 
   r = obj_op->prepare(y);
   if (r < 0) {
+    if (r == -ETIMEDOUT) {
+      // The head object write may eventually succeed, clear the set of objects for deletion. if it
+      // doesn't ever succeed, we'll orphan any tail objects as if we'd crashed before that write
+      writer.clear_written();
+    }
     return r;
   }
 
@@ -435,6 +440,7 @@ int MultipartObjectProcessor::complete(size_t accounted_size,
   obj_op->params.zones_trace = zones_trace;
   obj_op->params.modify_tail = true;
   obj_op->params.attrs = &attrs;
+  obj_op->params.pmeta_placement_rule = &tail_placement_rule;
   r = obj_op->prepare(y);
   if (r < 0) {
     return r;
