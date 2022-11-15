@@ -53,7 +53,7 @@
     "@angular/platform-browser": "13.3.11",
     "@angular/platform-browser-dynamic": "13.3.11",
     "@angular/router": "13.3.11",
-    "@circlon/angular-tree-component": "10.0.0",
+    "@circlon/angular-tree-component": "11.0.4",
     "@ng-bootstrap/ng-bootstrap": "12.1.2",
     "@popperjs/core": "2.10.2",
     "@swimlane/ngx-datatable": "18.0.0",
