@@ -54,6 +54,8 @@ class ReplicaReservations {
   void send_reject();
 
  public:
+  std::string m_log_msg_prefix;
+
   /**
    *  quietly discard all knowledge about existing reservations. No messages
    *  are sent to peers.
@@ -69,18 +71,19 @@ class ReplicaReservations {
   void handle_reserve_grant(OpRequestRef op, pg_shard_t from);
 
   void handle_reserve_reject(OpRequestRef op, pg_shard_t from);
+
+  std::ostream& gen_prefix(std::ostream& out) const;
 };
 
 /**
  *  wraps the local OSD scrub resource reservation in an RAII wrapper
  */
 class LocalReservation {
-  PG* m_pg;
   OSDService* m_osds;
   bool m_holding_local_reservation{false};
 
  public:
-  LocalReservation(PG* pg, OSDService* osds);
+  LocalReservation(OSDService* osds);
   ~LocalReservation();
   bool is_reserved() const { return m_holding_local_reservation; }
 };
@@ -89,18 +92,21 @@ class LocalReservation {
  *  wraps the OSD resource we are using when reserved as a replica by a scrubbing master.
  */
 class ReservedByRemotePrimary {
+  const PgScrubber* m_scrubber; ///< we will be using its gen_prefix()
   PG* m_pg;
   OSDService* m_osds;
   bool m_reserved_by_remote_primary{false};
   const epoch_t m_reserved_at;
 
  public:
-  ReservedByRemotePrimary(PG* pg, OSDService* osds, epoch_t epoch);
+  ReservedByRemotePrimary(const PgScrubber* scrubber, PG* pg, OSDService* osds, epoch_t epoch);
   ~ReservedByRemotePrimary();
   [[nodiscard]] bool is_reserved() const { return m_reserved_by_remote_primary; }
 
   /// compare the remembered reserved-at epoch to the current interval
   [[nodiscard]] bool is_stale() const;
+
+  std::ostream& gen_prefix(std::ostream& out) const;
 };
 
 /**
@@ -307,6 +313,8 @@ class PgScrubber : public ScrubPgIF, public ScrubMachineListener {
 
   void scrub_clear_state() final;
 
+  bool is_queued_or_active() const final;
+
   /**
    *  add to scrub statistics, but only if the soid is below the scrub start
    */
@@ -367,6 +375,8 @@ class PgScrubber : public ScrubPgIF, public ScrubMachineListener {
 
   void on_digest_updates() final;
 
+  void scrub_finish() final;
+
   ScrubMachineListener::MsgAndEpoch
   prep_replica_map_msg(Scrub::PreemptionNoted was_preempted) final;
 
@@ -396,11 +406,16 @@ class PgScrubber : public ScrubPgIF, public ScrubMachineListener {
 
   [[nodiscard]] bool was_epoch_changed() const final;
 
+  void set_queued_or_active() final;
+  void clear_queued_or_active() final;
+
   void mark_local_map_ready() final;
 
   [[nodiscard]] bool are_all_maps_available() const final;
 
   std::string dump_awaited_maps() const final;
+
+  std::ostream& gen_prefix(std::ostream& out) const final;
 
  protected:
   bool state_test(uint64_t m) const { return m_pg->state_test(m); }
@@ -520,9 +535,6 @@ class PgScrubber : public ScrubPgIF, public ScrubMachineListener {
   void cleanup_on_finish();  // scrub_clear_state() as called for a Primary when
 			     // Active->NotActive
 
-  /// the part that actually finalizes a scrub
-  void scrub_finish();
-
  protected:
   PG* const m_pg;
 
@@ -569,6 +581,23 @@ class PgScrubber : public ScrubPgIF, public ScrubMachineListener {
   scrub_flags_t m_flags;
 
   bool m_active{false};
+
+  /**
+   * a flag designed to prevent the initiation of a second scrub on a PG for which scrubbing
+   * has been initiated.
+   *
+   * set once scrubbing was initiated (i.e. - even before the FSM event that
+   * will trigger a state-change out of Inactive was handled), and only reset
+   * once the FSM is back in Inactive.
+   * In other words - its ON period encompasses:
+   *   - the time period covered today by 'queued', and
+   *   - the time when m_active is set, and
+   *   - all the time from scrub_finish() calling update_stats() till the
+   *     FSM handles the 'finished' event
+   *
+   * Compared with 'm_active', this flag is asserted earlier  and remains ON for longer.
+   */
+  bool m_queued_or_active{false};
 
   eversion_t m_subset_last_update{};
 

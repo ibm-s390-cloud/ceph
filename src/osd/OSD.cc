@@ -1378,7 +1378,7 @@ bool OSDService::prepare_to_stop()
 
   OSDMapRef osdmap = get_osdmap();
   if (osdmap && osdmap->is_up(whoami)) {
-    dout(0) << __func__ << " telling mon we are shutting down" << dendl;
+    dout(0) << __func__ << " telling mon we are shutting down and dead " << dendl;
     set_state(PREPARING_TO_STOP);
     monc->send_mon_message(
       new MOSDMarkMeDown(
@@ -1386,12 +1386,14 @@ bool OSDService::prepare_to_stop()
 	whoami,
 	osdmap->get_addrs(whoami),
 	osdmap->get_epoch(),
-	true  // request ack
+	true,  // request ack
+	true   // mark as down and dead
 	));
     const auto timeout = ceph::make_timespan(cct->_conf->osd_mon_shutdown_timeout);
     is_stopping_cond.wait_for(l, timeout,
       [this] { return get_state() == STOPPING; });
   }
+
   dout(0) << __func__ << " starting shutdown" << dendl;
   set_state(STOPPING);
   return true;
@@ -2068,7 +2070,10 @@ void OSDService::_queue_for_recovery(
 // Commands shared between OSD's console and admin console:
 namespace ceph::osd_cmds {
 
-int heap(CephContext& cct, const cmdmap_t& cmdmap, Formatter& f, std::ostream& os);
+int heap(CephContext& cct,
+         const cmdmap_t& cmdmap,
+         std::ostream& outos,
+         std::ostream& erros);
 
 } // namespace ceph::osd_cmds
 
@@ -2666,12 +2671,24 @@ will start to track new ops received afterwards.";
     f->close_section();
   } else if (prefix == "dump_blocklist") {
     list<pair<entity_addr_t,utime_t> > bl;
+    list<pair<entity_addr_t,utime_t> > rbl;
     OSDMapRef curmap = service.get_osdmap();
+    curmap->get_blocklist(&bl, &rbl);
 
     f->open_array_section("blocklist");
-    curmap->get_blocklist(&bl);
     for (list<pair<entity_addr_t,utime_t> >::iterator it = bl.begin();
 	it != bl.end(); ++it) {
+      f->open_object_section("entry");
+      f->open_object_section("entity_addr_t");
+      it->first.dump(f);
+      f->close_section(); //entity_addr_t
+      it->second.localtime(f->dump_stream("expire_time"));
+      f->close_section(); //entry
+    }
+    f->close_section(); //blocklist
+    f->open_array_section("range_blocklist");
+    for (list<pair<entity_addr_t,utime_t> >::iterator it = rbl.begin();
+	it != rbl.end(); ++it) {
       f->open_object_section("entry");
       f->open_object_section("entity_addr_t");
       it->first.dump(f);
@@ -2897,7 +2914,9 @@ will start to track new ops received afterwards.";
   }
 
   else if (prefix == "heap") {
-    ret = ceph::osd_cmds::heap(*cct, cmdmap, *f, ss);
+    std::stringstream outss;
+    ret = ceph::osd_cmds::heap(*cct, cmdmap, outss, ss);
+    outbl.append(outss);
   }
 
   else if (prefix == "debug dump_missing") {
@@ -7686,7 +7705,7 @@ void OSD::sched_scrub()
       }
 
       // This has already started, so go on to the next scrub job
-      if (pg->is_scrub_active()) {
+      if (pg->is_scrub_queued_or_active()) {
 	pg->unlock();
 	dout(20) << __func__ << ": already in progress pgid " << scrub_job.pgid << dendl;
 	continue;
@@ -11304,17 +11323,19 @@ void OSD::ShardedOpWQ::_enqueue_front(OpSchedulerItem&& item)
 
 namespace ceph::osd_cmds {
 
-int heap(CephContext& cct, const cmdmap_t& cmdmap, Formatter& f,
-	 std::ostream& os)
+int heap(CephContext& cct,
+         const cmdmap_t& cmdmap,
+         std::ostream& outos,
+         std::ostream& erros)
 {
   if (!ceph_using_tcmalloc()) {
-        os << "could not issue heap profiler command -- not using tcmalloc!";
+        erros << "could not issue heap profiler command -- not using tcmalloc!";
         return -EOPNOTSUPP;
   }
 
   string cmd;
   if (!cmd_getval(cmdmap, "heapcmd", cmd)) {
-        os << "unable to get value for command \"" << cmd << "\"";
+        erros << "unable to get value for command \"" << cmd << "\"";
        return -EINVAL;
   }
 
@@ -11326,7 +11347,7 @@ int heap(CephContext& cct, const cmdmap_t& cmdmap, Formatter& f,
     cmd_vec.push_back(val);
   }
 
-  ceph_heap_profiler_handle_command(cmd_vec, os);
+  ceph_heap_profiler_handle_command(cmd_vec, outos);
 
   return 0;
 }

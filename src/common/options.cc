@@ -3798,6 +3798,10 @@ std::vector<Option> get_global_options() {
     .set_flag(Option::FLAG_RUNTIME)
     .set_description("Time in seconds to sleep before next removal transaction when data is on HDD and journal is on SSD"),
 
+    Option("osd_rocksdb_iterator_bounds_enabled", Option::TYPE_BOOL, Option::LEVEL_DEV)
+    .set_default(true)
+    .set_description("Whether omap iterator bounds are applied to rocksdb iterator ReadOptions"),
+
     Option("osd_failsafe_full_ratio", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(.97)
     .set_description(""),
@@ -3808,7 +3812,7 @@ std::vector<Option> get_global_options() {
     .set_long_description("Setting this to false makes the OSD do a slower teardown of all state when it receives a SIGINT or SIGTERM or when shutting down for any other reason.  That slow shutdown is primarilyy useful for doing memory leak checking with valgrind."),
 
     Option("osd_fast_shutdown_notify_mon", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
-    .set_default(false)
+    .set_default(true)
     .set_description("Tell mon about OSD shutdown on immediate shutdown")
     .set_long_description("Tell the monitor the OSD is shutting down on immediate shutdown. This helps with cluster log messages from other OSDs reporting it immediately failed.")
     .add_see_also({"osd_fast_shutdown", "osd_mon_shutdown_timeout"}),
@@ -6395,11 +6399,6 @@ std::vector<Option> get_rgw_options() {
     .set_min_max(0.01, 100000.0)
     .set_description("pg_autoscale_bias value for RGW metadata (omap-heavy) pools"),
 
-    Option("rgw_rados_pool_pg_num_min", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
-    .set_default(8)
-    .set_min_max(1, 1024)
-    .set_description("pg_num_min value for RGW metadata (omap-heavy) pools"),
-
     Option("rgw_rados_pool_recovery_priority", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
     .set_default(5)
     .set_min_max(-10, 10)
@@ -7825,7 +7824,7 @@ static std::vector<Option> get_rbd_options() {
     .set_description("time-delay in seconds for rbd-mirror asynchronous replication"),
 
     Option("rbd_mirroring_max_mirroring_snapshots", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
-    .set_default(3)
+    .set_default(5)
     .set_min(3)
     .set_description("mirroring snapshots limit"),
 
@@ -8023,10 +8022,6 @@ static std::vector<Option> get_rbd_options() {
     .set_default("disabled")
     .set_enum_allowed({"disabled", "rwl", "ssd"})
     .set_description("enable persistent write back cache for this volume"),
-
-    Option("rbd_persistent_cache_log_periodic_stats", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
-    .set_default(false)
-    .set_description("emit periodic perf stats to debug log"),
 
     Option("rbd_persistent_cache_size", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
     .set_default(1073741824)
@@ -8343,6 +8338,11 @@ std::vector<Option> get_mds_options() {
     Option("mds_heartbeat_grace", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(15)
     .set_description("tolerance in seconds for MDS internal heartbeat"),
+
+    Option("mds_heartbeat_reset_grace", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
+    .set_default(1000)
+    .set_description("the basic unit of tolerance in how many circles in a loop, which will"
+	"keep running by holding the mds_lock, it must trigger to reset heartbeat"),
 
     Option("mds_enforce_unique_name", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
     .set_default(true)
@@ -8727,6 +8727,10 @@ std::vector<Option> get_mds_options() {
     .set_default(0)
     .set_description(""),
 
+    Option("mds_inject_health_dummy", Option::TYPE_BOOL, Option::LEVEL_DEV)
+    .set_default(false)
+    .set_description(""),
+
     Option("mds_inject_traceless_reply_probability", Option::TYPE_FLOAT, Option::LEVEL_DEV)
     .set_default(0)
     .set_description(""),
@@ -8949,8 +8953,8 @@ std::vector<Option> get_mds_client_options() {
     .set_default(false)
     .set_description("issue new requests to a random active MDS"),
 
-    Option("client_mount_timeout", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
-    .set_default(300.0)
+    Option("client_mount_timeout", Option::TYPE_SECS, Option::LEVEL_ADVANCED)
+    .set_default(300)
     .set_description("timeout for mounting CephFS (seconds)"),
 
     Option("client_tick_interval", Option::TYPE_SECS, Option::LEVEL_DEV)
@@ -9003,7 +9007,7 @@ std::vector<Option> get_mds_client_options() {
     .set_default(30)
     .set_description(""),
 
-    Option("client_caps_release_delay", Option::TYPE_INT, Option::LEVEL_DEV)
+    Option("client_caps_release_delay", Option::TYPE_SECS, Option::LEVEL_DEV)
     .set_default(5)
     .set_description(""),
 
@@ -9168,6 +9172,8 @@ std::vector<Option> get_mds_client_options() {
     .set_description("confirm access to inode's data pool/namespace described in file layout"),
 
     Option("client_use_faked_inos", Option::TYPE_BOOL, Option::LEVEL_DEV)
+    .set_flag(Option::FLAG_STARTUP)
+    .set_flag(Option::FLAG_NO_MON_UPDATE)
     .set_default(false)
     .set_description(""),
 
@@ -9200,12 +9206,26 @@ std::vector<Option> get_mds_client_options() {
     .set_description("Size of thread pool for ASIO completions")
     .add_tag("client"),
 
+    Option("client_quota", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
+    .set_flag(Option::FLAG_RUNTIME)
+    .set_default(true)
+    .set_description("Enable quota enforcement")
+    .set_long_description("Enable quota_bytes and quota_files enforcement for the client."),
+
     Option("client_shutdown_timeout", Option::TYPE_SECS, Option::LEVEL_ADVANCED)
     .set_flag(Option::FLAG_RUNTIME)
     .set_default(30)
     .set_min(0)
     .set_description("timeout for shutting down CephFS")
     .set_long_description("Timeout for shutting down CephFS via unmount or shutdown.")
+    .add_tag("client"),
+
+    Option("client_collect_and_send_global_metrics", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
+    .set_flag(Option::FLAG_RUNTIME)
+    .set_default(false)
+    .set_description("to enable and force collecting and sending the global metrics to MDS")
+    .set_long_description("To be careful for this, when connecting to some old ceph "
+	"clusters it may crash the MDS daemons while upgrading")
     .add_tag("client")
     });
 }

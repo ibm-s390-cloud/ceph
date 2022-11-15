@@ -42,12 +42,15 @@ void on_event_discard(std::string_view nm)
   dout(20) << " event: --^^^^---- " << nm << dendl;
 }
 
-void ScrubMachine::my_states() const
+std::string ScrubMachine::current_states_desc() const
 {
+  std::string sts{"<"};
   for (auto si = state_begin(); si != state_end(); ++si) {
-    const auto& siw{*si};  // prevents a warning re side-effects
-    dout(20) << " state: " << boost::core::demangle(typeid(siw).name()) << dendl;
+    const auto& siw{ *si };  // prevents a warning re side-effects
+    // the '7' is the size of the 'scrub::'
+    sts += boost::core::demangle(typeid(siw).name()).substr(7, std::string::npos) + "/";
   }
+  return sts + ">";
 }
 
 void ScrubMachine::assert_not_active() const
@@ -70,10 +73,17 @@ bool ScrubMachine::is_accepting_updates() const
 
 // for the rest of the code in this file - we know what PG we are dealing with:
 #undef dout_prefix
-#define dout_prefix _prefix(_dout, this->context<ScrubMachine>().m_pg)
-template <class T> static ostream& _prefix(std::ostream* _dout, T* t)
+#define dout_prefix _prefix(_dout, this->context<ScrubMachine>())
+
+template <class T>
+static ostream& _prefix(std::ostream* _dout, T& t)
 {
-  return t->gen_prefix(*_dout) << " scrubberFSM pg(" << t->pg_id << ") ";
+  return t.gen_prefix(*_dout);
+}
+
+std::ostream& ScrubMachine::gen_prefix(std::ostream& out) const
+{
+  return m_scrbr->gen_prefix(out) << "FSM: ";
 }
 
 // ////////////// the actual actions
@@ -83,6 +93,8 @@ template <class T> static ostream& _prefix(std::ostream* _dout, T* t)
 NotActive::NotActive(my_context ctx) : my_base(ctx)
 {
   dout(10) << "-- state -->> NotActive" << dendl;
+  DECLARE_LOCALS;  // 'scrbr' & 'pg_id' aliases
+  scrbr->clear_queued_or_active();
 }
 
 // ----------------------- ReservingReplicas ---------------------------------
@@ -130,6 +142,7 @@ ActiveScrubbing::~ActiveScrubbing()
   DECLARE_LOCALS;  // 'scrbr' & 'pg_id' aliases
   dout(15) << __func__ << dendl;
   scrbr->unreserve_replicas();
+  scrbr->clear_queued_or_active();
 }
 
 /*
@@ -398,7 +411,9 @@ sc::result WaitReplicas::react(const GotReplicas&)
 
 WaitDigestUpdate::WaitDigestUpdate(my_context ctx) : my_base(ctx)
 {
+  DECLARE_LOCALS;  // 'scrbr' & 'pg_id' aliases
   dout(10) << "-- state -->> Act/WaitDigestUpdate" << dendl;
+
   // perform an initial check: maybe we already
   // have all the updates we need:
   // (note that DigestUpdate is usually an external event)
@@ -420,10 +435,17 @@ sc::result WaitDigestUpdate::react(const DigestUpdate&)
   return discard_event();
 }
 
-ScrubMachine::ScrubMachine(PG* pg, ScrubMachineListener* pg_scrub)
-    : m_pg{pg}, m_pg_id{pg->pg_id}, m_scrbr{pg_scrub}
+sc::result WaitDigestUpdate::react(const ScrubFinished&)
 {
-  dout(15) << "ScrubMachine created " << m_pg_id << dendl;
+  DECLARE_LOCALS;  // 'scrbr' & 'pg_id' aliases
+  dout(10) << "WaitDigestUpdate::react(const ScrubFinished&)" << dendl;
+  scrbr->scrub_finish();
+  return transit<NotActive>();
+}
+
+ScrubMachine::ScrubMachine(PG* pg, ScrubMachineListener* pg_scrub)
+    : m_pg_id{pg->pg_id}, m_scrbr{pg_scrub}
+{
 }
 
 ScrubMachine::~ScrubMachine() = default;

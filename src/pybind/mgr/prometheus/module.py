@@ -550,7 +550,10 @@ class Module(MgrModule):
         ),
         Option(
             'server_port',
-            type='int'
+            type='int',
+            default=DEFAULT_PORT,
+            desc='the port on which the module listens for HTTP requests',
+            runtime=True
         ),
         Option(
             'scrape_interval',
@@ -815,6 +818,31 @@ class Module(MgrModule):
 
         return metrics
 
+    def get_server_addr(self) -> str:
+        """
+        Return the current mgr server IP.
+        """
+        server_addr = cast(str, self.get_localized_module_option('server_addr', get_default_addr()))
+        if server_addr in ['::', '0.0.0.0']:
+            return self.get_mgr_ip()
+        return server_addr
+
+    def config_notify(self) -> None:
+        """
+        This method is called whenever one of our config options is changed.
+        """
+        # https://stackoverflow.com/questions/7254845/change-cherrypy-port-and-restart-web-server
+        # if we omit the line: cherrypy.server.httpserver = None
+        # then the cherrypy server is not restarted correctly
+        self.log.info('Restarting engine...')
+        cherrypy.engine.stop()
+        cherrypy.server.httpserver = None
+        server_port = cast(int, self.get_localized_module_option('server_port', DEFAULT_PORT))
+        self.set_uri(build_url(scheme='http', host=self.get_server_addr(), port=server_port, path='/'))
+        cherrypy.config.update({'server.socket_port': server_port})
+        cherrypy.engine.start()
+        self.log.info('Engine started.')
+
     @profile_method()
     def get_health(self) -> None:
 
@@ -943,11 +971,11 @@ class Module(MgrModule):
         for mon in mon_status['monmap']['mons']:
             rank = mon['rank']
             id_ = mon['name']
-            host_version = servers.get((id_, 'mon'), ('', '', ''))
+            mon_version = servers.get((id_, 'mon'), ('', '', ''))
             self.metrics['mon_metadata'].set(1, (
-                'mon.{}'.format(id_), host_version[0],
+                'mon.{}'.format(id_), mon_version[0],
                 mon['public_addr'].rsplit(':', 1)[0], rank,
-                host_version[1]
+                mon_version[1]
             ))
             in_quorum = int(rank in mon_status['quorum'])
             self.metrics['mon_quorum_status'].set(in_quorum, (
@@ -1030,10 +1058,9 @@ class Module(MgrModule):
     def get_service_list(self) -> Dict[Tuple[str, str], Tuple[str, str, str]]:
         ret = {}
         for server in self.list_servers():
-            version = cast(str, server.get('ceph_version', ''))
             host = cast(str, server.get('hostname', ''))
             for service in cast(List[ServiceInfoT], server.get('services', [])):
-                ret.update({(service['id'], service['type']): (host, version, service.get('name', ''))})
+                ret.update({(service['id'], service['type']): (host, service['ceph_version'], service.get('name', ''))})
         return ret
 
     @profile_method()
@@ -1071,7 +1098,7 @@ class Module(MgrModule):
                               "skipping output".format(id_))
                 continue
 
-            host_version = servers.get((str(id_), 'osd'), ('', '', ''))
+            osd_version = servers.get((str(id_), 'osd'), ('', '', ''))
 
             # collect disk occupation metadata
             osd_metadata = self.get_metadata("osd", str(id_))
@@ -1088,10 +1115,10 @@ class Module(MgrModule):
                 c_addr,
                 dev_class,
                 f_iface,
-                host_version[0],
+                osd_version[0],
                 obj_store,
                 p_addr,
-                host_version[1]
+                osd_version[1]
             ))
 
             # collect osd status
@@ -1523,6 +1550,20 @@ class Module(MgrModule):
                 cast(MetricCounter, sum_metric).add(duration, (method_name,))
                 cast(MetricCounter, count_metric).add(1, (method_name,))
 
+    def get_pg_repaired_objects(self) -> None:
+        dump = self.get('pg_dump')
+        for stats in dump['pool_stats']:
+            path = f'pg_objects_repaired{stats["poolid"]}'
+            self.metrics[path] = Metric(
+                'counter',
+                'pg_objects_repaired',
+                'Number of objects repaired in a pool Count',
+                ('poolid',)
+            )
+
+            self.metrics[path].set(stats['stat_sum']['num_objects_repaired'],
+                                   labelvalues=(stats['poolid'],))
+
     @profile_method(True)
     def collect(self) -> str:
         # Clear the metrics before scraping
@@ -1538,6 +1579,7 @@ class Module(MgrModule):
         self.get_mgr_status()
         self.get_metadata_and_osd_status()
         self.get_pg_status()
+        self.get_pg_repaired_objects()
         self.get_num_objects()
 
         for daemon, counters in self.get_all_perf_counters().items():
@@ -1728,9 +1770,7 @@ class Module(MgrModule):
         })
         # Publish the URI that others may use to access the service we're
         # about to start serving
-        if server_addr in ['::', '0.0.0.0']:
-            server_addr = self.get_mgr_ip()
-        self.set_uri(build_url(scheme='http', host=server_addr, port=server_port, path='/'))
+        self.set_uri(build_url(scheme='http', host=self.get_server_addr(), port=server_port, path='/'))
 
         cherrypy.tree.mount(Root(), "/")
         self.log.info('Starting engine...')
@@ -1742,6 +1782,7 @@ class Module(MgrModule):
         # tell metrics collection thread to stop collecting new metrics
         self.metrics_thread.stop()
         cherrypy.engine.stop()
+        cherrypy.server.httpserver = None
         self.log.info('Engine stopped.')
         self.shutdown_rbd_stats()
         # wait for the metrics collection thread to stop
@@ -1838,6 +1879,7 @@ class StandbyModule(MgrStandbyModule):
         self.shutdown_event.wait()
         self.shutdown_event.clear()
         cherrypy.engine.stop()
+        cherrypy.server.httpserver = None
         self.log.info('Engine stopped.')
 
     def shutdown(self) -> None:

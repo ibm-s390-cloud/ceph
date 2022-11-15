@@ -1,13 +1,16 @@
 import errno
+import ipaddress
 import logging
 import os
+import socket
 from typing import List, Any, Tuple, Dict, Optional, cast
 from urllib.parse import urlparse
 
 from mgr_module import HandleCommandResult
 
 from orchestrator import DaemonDescription
-from ceph.deployment.service_spec import AlertManagerSpec, GrafanaSpec, ServiceSpec, SNMPGatewaySpec
+from ceph.deployment.service_spec import AlertManagerSpec, GrafanaSpec, ServiceSpec, \
+    SNMPGatewaySpec, PrometheusSpec
 from cephadm.services.cephadmservice import CephadmService, CephadmDaemonDeploySpec
 from cephadm.services.ingress import IngressSpec
 from mgr_util import verify_tls, ServerConfigException, create_self_signed_cert, build_url
@@ -39,8 +42,10 @@ class GrafanaService(CephadmService):
         grafana_data_sources = self.mgr.template.render(
             'services/grafana/ceph-dashboard.yml.j2', {'hosts': prom_services})
 
-        cert = self.mgr.get_store('grafana_crt')
-        pkey = self.mgr.get_store('grafana_key')
+        cert_path = f'{daemon_spec.host}/grafana_crt'
+        key_path = f'{daemon_spec.host}/grafana_key'
+        cert = self.mgr.get_store(cert_path)
+        pkey = self.mgr.get_store(key_path)
         if cert and pkey:
             try:
                 verify_tls(cert, pkey)
@@ -48,9 +53,9 @@ class GrafanaService(CephadmService):
                 logger.warning('Provided grafana TLS certificates invalid: %s', str(e))
                 cert, pkey = None, None
         if not (cert and pkey):
-            cert, pkey = create_self_signed_cert('Ceph', 'cephadm')
-            self.mgr.set_store('grafana_crt', cert)
-            self.mgr.set_store('grafana_key', pkey)
+            cert, pkey = create_self_signed_cert('Ceph', daemon_spec.host)
+            self.mgr.set_store(cert_path, cert)
+            self.mgr.set_store(key_path, pkey)
             if 'dashboard' in self.mgr.get('mgr_map')['modules']:
                 self.mgr.check_mon_command({
                     'prefix': 'dashboard set-grafana-api-ssl-verify',
@@ -65,6 +70,10 @@ class GrafanaService(CephadmService):
                 'http_port': daemon_spec.ports[0] if daemon_spec.ports else self.DEFAULT_SERVICE_PORT,
                 'http_addr': daemon_spec.ip if daemon_spec.ip else ''
             })
+
+        if 'dashboard' in self.mgr.get('mgr_map')['modules'] and spec.initial_admin_password:
+            self.mgr.check_mon_command(
+                {'prefix': 'dashboard set-grafana-api-password'}, inbuf=spec.initial_admin_password)
 
         config_file = {
             'files': {
@@ -97,6 +106,17 @@ class GrafanaService(CephadmService):
             service_url
         )
 
+    def pre_remove(self, daemon: DaemonDescription) -> None:
+        """
+        Called before grafana daemon is removed.
+        """
+        if daemon.hostname is not None:
+            # delete cert/key entires for this grafana daemon
+            cert_path = f'{daemon.hostname}/grafana_crt'
+            key_path = f'{daemon.hostname}/grafana_key'
+            self.mgr.set_store(cert_path, None)
+            self.mgr.set_store(key_path, None)
+
     def ok_to_stop(self,
                    daemon_ids: List[str],
                    force: bool = False,
@@ -122,6 +142,10 @@ class AlertmanagerService(CephadmService):
         default_webhook_urls: List[str] = []
 
         spec = cast(AlertManagerSpec, self.mgr.spec_store[daemon_spec.service_name].spec)
+        try:
+            secure = spec.secure
+        except AttributeError:
+            secure = False
         user_data = spec.user_data
         if 'default_webhook_urls' in user_data and isinstance(
                 user_data['default_webhook_urls'], list):
@@ -135,8 +159,19 @@ class AlertmanagerService(CephadmService):
         proto = None  # http: or https:
         url = mgr_map.get('services', {}).get('dashboard', None)
         if url:
-            dashboard_urls.append(url)
-            p_result = urlparse(url)
+            p_result = urlparse(url.rstrip('/'))
+            hostname = socket.getfqdn(p_result.hostname)
+
+            try:
+                ip = ipaddress.ip_address(hostname)
+            except ValueError:
+                pass
+            else:
+                if ip.version == 6:
+                    hostname = f'[{hostname}]'
+
+            dashboard_urls.append(
+                f'{p_result.scheme}://{hostname}:{p_result.port}{p_result.path}')
             proto = p_result.scheme
             port = p_result.port
         # scan all mgrs to generate deps and to get standbys too.
@@ -151,7 +186,7 @@ class AlertmanagerService(CephadmService):
                 continue
             assert dd.hostname is not None
             addr = self._inventory_get_fqdn(dd.hostname)
-            dashboard_urls.append(build_url(scheme=proto, host=addr, port=port))
+            dashboard_urls.append(build_url(scheme=proto, host=addr, port=port).rstrip('/'))
 
         for dd in self.mgr.cache.get_daemons_by_service('snmp-gateway'):
             assert dd.hostname is not None
@@ -166,6 +201,7 @@ class AlertmanagerService(CephadmService):
             'dashboard_urls': dashboard_urls,
             'default_webhook_urls': default_webhook_urls,
             'snmp_gateway_urls': snmp_gateway_urls,
+            'secure': secure,
         }
         yml = self.mgr.template.render('services/alertmanager/alertmanager.yml.j2', context)
 
@@ -217,6 +253,7 @@ class AlertmanagerService(CephadmService):
 class PrometheusService(CephadmService):
     TYPE = 'prometheus'
     DEFAULT_SERVICE_PORT = 9095
+    DEFAULT_MGR_PROMETHEUS_PORT = 9283
 
     def config(self, spec: ServiceSpec) -> None:
         # make sure module is enabled
@@ -244,16 +281,29 @@ class PrometheusService(CephadmService):
         assert self.TYPE == daemon_spec.daemon_type
         deps = []  # type: List[str]
 
+        prom_spec = cast(PrometheusSpec, self.mgr.spec_store[daemon_spec.service_name].spec)
+
+        try:
+            retention_time = prom_spec.retention_time if prom_spec.retention_time else '15d'
+        except AttributeError:
+            retention_time = '15d'
+
         # scrape mgrs
         mgr_scrape_list = []
         mgr_map = self.mgr.get('mgr_map')
-        port = None
+        port = cast(int, self.mgr.get_module_option_ex(
+            'prometheus', 'server_port', self.DEFAULT_MGR_PROMETHEUS_PORT))
+        deps.append(str(port))
         t = mgr_map.get('services', {}).get('prometheus', None)
         if t:
             p_result = urlparse(t)
-            t = t.split('/')[2]
-            mgr_scrape_list.append(t)
-            port = p_result.port or 9283
+            # urlparse .hostname removes '[]' from the hostname in case
+            # of ipv6 addresses so if this is the case then we just
+            # append the brackets when building the final scrape endpoint
+            if '[' in p_result.netloc and ']' in p_result.netloc:
+                mgr_scrape_list.append(f"[{p_result.hostname}]:{port}")
+            else:
+                mgr_scrape_list.append(f"{p_result.hostname}:{port}")
         # scan all mgrs to generate deps and to get standbys too.
         # assume that they are all on the same port as the active mgr.
         for dd in self.mgr.cache.get_daemons_by_service('mgr'):
@@ -310,12 +360,13 @@ class PrometheusService(CephadmService):
             'haproxy_targets': haproxy_targets,
             'nodes': nodes,
         }
-        r = {
+        r: Dict[str, Any] = {
             'files': {
                 'prometheus.yml':
                     self.mgr.template.render(
                         'services/prometheus/prometheus.yml.j2', context)
-            }
+            },
+            'retention_time': retention_time
         }
 
         # include alerts, if present in the container
@@ -323,6 +374,23 @@ class PrometheusService(CephadmService):
             with open(self.mgr.prometheus_alerts_path, 'r', encoding='utf-8') as f:
                 alerts = f.read()
             r['files']['/etc/prometheus/alerting/ceph_alerts.yml'] = alerts
+
+        # Include custom alerts if present in key value store. This enables the
+        # users to add custom alerts. Write the file in any case, so that if the
+        # content of the key value store changed, that file is overwritten
+        # (emptied in case they value has been removed from the key value
+        # store). This prevents the necessity to adapt `cephadm` binary to
+        # remove the file.
+        #
+        # Don't use the template engine for it as
+        #
+        #   1. the alerts are always static and
+        #   2. they are a template themselves for the Go template engine, which
+        #      use curly braces and escaping that is cumbersome and unnecessary
+        #      for the user.
+        #
+        r['files']['/etc/prometheus/alerting/custom_alerts.yml'] = \
+            self.mgr.get_store('services/prometheus/alerting/custom_alerts.yml', '')
 
         return r, sorted(deps)
 

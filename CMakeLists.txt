@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.10.2)
 # remove cmake/modules/FindPython* once 3.12 is required
 
 project(ceph
-  VERSION 16.2.7
+  VERSION 16.2.10
   LANGUAGES CXX C ASM)
 
 foreach(policy
@@ -36,7 +36,15 @@ if(WIN32)
   # the targeted Windows version. The availability of certain functions and
   # structures will depend on it.
   set(WIN32_WINNT "0x0A00" CACHE STRING "Targeted Windows version.")
-  add_definitions(-D_WIN32_WINNT=${WIN32_WINNT})
+  # In order to avoid known winpthread issues, we're using the boost
+  # shared mutex implementation.
+  # https://github.com/msys2/MINGW-packages/issues/3319
+  add_definitions(
+    -D_WIN32_WINNT=${WIN32_WINNT}
+    -DBOOST_THREAD_PROVIDES_GENERIC_SHARED_MUTEX_ON_WIN
+    -DBOOST_THREAD_V2_SHARED_MUTEX
+  )
+  set(Boost_THREADAPI "win32")
 endif()
 
 if(MINGW)
@@ -474,12 +482,8 @@ option(WITH_CEPHFS "CephFS is enabled" ON)
 if(NOT WIN32)
 # Please specify 3.[0-7] if you want to build with a certain version of python3.
 set(WITH_PYTHON3 "3" CACHE STRING "build with specified python3 version")
-if(NOT WITH_PYTHON3 STREQUAL "3")
-  set(find_python3_exact "EXACT")
-endif()
-find_package(Python3 ${WITH_PYTHON3} ${find_python3_exact} REQUIRED
+find_package(Python3 ${WITH_PYTHON3} EXACT REQUIRED
   COMPONENTS Interpreter Development)
-unset(find_python3_exact)
 
 option(WITH_MGR "ceph-mgr is enabled" ON)
 if(WITH_MGR)
@@ -685,8 +689,6 @@ add_custom_target(check
 add_subdirectory(src)
 
 add_subdirectory(qa)
-add_subdirectory(monitoring)
-
 add_subdirectory(doc)
 if(WITH_MANPAGE)
   add_subdirectory(man)
@@ -702,9 +704,7 @@ if(LINUX)
 endif()
 
 option(WITH_GRAFANA "install grafana dashboards" OFF)
-if(WITH_GRAFANA)
-  add_subdirectory(monitoring/grafana/dashboards)
-endif()
+add_subdirectory(monitoring/ceph-mixin)
 
 CMAKE_DEPENDENT_OPTION(WITH_BOOST_VALGRIND "Boost support for valgrind" OFF
   "NOT WITH_SYSTEM_BOOST" OFF)

@@ -3505,14 +3505,6 @@ BlueStore::BlobRef BlueStore::ExtentMap::split_blob(
 #undef dout_prefix
 #define dout_prefix *_dout << "bluestore.onode(" << this << ")." << __func__ << " "
 
-//
-// A tricky thing about Onode's ref counter is that we do an additional
-// increment when newly pinned instance is detected. And -1 on unpin.
-// This prevents from a conflict with a delete call (when nref == 0).
-// The latter might happen while the thread is in unpin() function
-// (and e.g. waiting for lock acquisition) since nref is already
-// decremented. And another 'putting' thread on the instance will release it.
-//
 void BlueStore::Onode::get() {
   if (++nref >= 2 && !pinned) {
     OnodeCacheShard* ocs = c->get_onode_cache();
@@ -3525,11 +3517,7 @@ void BlueStore::Onode::get() {
     }
     bool was_pinned = pinned;
     pinned = nref >= 2;
-    // additional increment for newly pinned instance
     bool r = !was_pinned && pinned;
-    if (r) {
-      ++nref;
-    }
     if (cached && r) {
       ocs->_pin(this);
     }
@@ -3539,7 +3527,7 @@ void BlueStore::Onode::get() {
 void BlueStore::Onode::put() {
   ++put_nref;
   int n = --nref;
-  if (n == 2) {
+  if (n == 1) {
     OnodeCacheShard* ocs = c->get_onode_cache();
     ocs->lock.lock();
     // It is possible that during waiting split_cache moved us to different OnodeCacheShard.
@@ -3549,8 +3537,7 @@ void BlueStore::Onode::put() {
       ocs->lock.lock();
     }
     bool need_unpin = pinned;
-    pinned = pinned && nref > 2; // intentionally use > not >= as we have
-                                 // +1 due to pinned state
+    pinned = pinned && nref >= 2;
     need_unpin = need_unpin && !pinned;
     if (cached && need_unpin) {
       if (exists) {
@@ -3560,10 +3547,6 @@ void BlueStore::Onode::put() {
         // remove will also decrement nref
         c->onode_map._remove(oid);
       }
-    }
-    // additional decrement for newly unpinned instance
-    if (need_unpin) {
-      --nref;
     }
     ocs->lock.unlock();
   }
@@ -4953,11 +4936,13 @@ void BlueStore::_init_logger()
 	    "Number of onodes in cache");
   b.add_u64(l_bluestore_pinned_onodes, "bluestore_pinned_onodes",
             "Number of pinned onodes in cache");
-  b.add_u64_counter(l_bluestore_onode_hits, "bluestore_onode_hits",
-		    "Sum for onode-lookups hit in the cache");
-  b.add_u64_counter(l_bluestore_onode_misses, "bluestore_onode_misses",
-		    "Sum for onode-lookups missed in the cache");
-  b.add_u64_counter(l_bluestore_onode_shard_hits, "bluestore_onode_shard_hits",
+  b.add_u64_counter(l_bluestore_onode_hits, "onode_hits",
+		    "Count of onode cache lookup hits",
+		    "o_ht", PerfCountersBuilder::PRIO_USEFUL);
+  b.add_u64_counter(l_bluestore_onode_misses, "onode_misses",
+		    "Count of onode cache lookup misses",
+		    "o_ms", PerfCountersBuilder::PRIO_USEFUL);
+  b.add_u64_counter(l_bluestore_onode_shard_hits, "onode_shard_hits",
 		    "Sum for onode-shard lookups hit in the cache");
   b.add_u64_counter(l_bluestore_onode_shard_misses,
 		    "bluestore_onode_shard_misses",
@@ -11001,10 +10986,10 @@ int BlueStore::_onode_omap_get(
   o->flush();
   {
     const string& prefix = o->get_omap_prefix();
-    KeyValueDB::Iterator it = db->get_iterator(prefix);
     string head, tail;
     o->get_omap_header(&head);
     o->get_omap_tail(&tail);
+    KeyValueDB::Iterator it = db->get_iterator(prefix, 0, KeyValueDB::IteratorBounds{head, tail});
     it->lower_bound(head);
     while (it->valid()) {
       if (it->key() == head) {
@@ -11086,10 +11071,10 @@ int BlueStore::omap_get_keys(
   o->flush();
   {
     const string& prefix = o->get_omap_prefix();
-    KeyValueDB::Iterator it = db->get_iterator(prefix);
     string head, tail;
     o->get_omap_key(string(), &head);
     o->get_omap_tail(&tail);
+    KeyValueDB::Iterator it = db->get_iterator(prefix, 0, KeyValueDB::IteratorBounds{head, tail});
     it->lower_bound(head);
     while (it->valid()) {
       if (it->key() >= tail) {
@@ -11274,7 +11259,15 @@ ObjectMap::ObjectMapIterator BlueStore::get_omap_iterator(
   }
   o->flush();
   dout(10) << __func__ << " has_omap = " << (int)o->onode.has_omap() <<dendl;
-  KeyValueDB::Iterator it = db->get_iterator(o->get_omap_prefix());
+  auto bounds = KeyValueDB::IteratorBounds();
+  if (o->onode.has_omap()) {
+    std::string lower_bound, upper_bound;
+    o->get_omap_key(string(), &lower_bound);
+    o->get_omap_tail(&upper_bound);
+    bounds.lower_bound = std::move(lower_bound);
+    bounds.upper_bound = std::move(upper_bound);
+  }
+  KeyValueDB::Iterator it = db->get_iterator(o->get_omap_prefix(), 0, std::move(bounds));
   return ObjectMap::ObjectMapIterator(new OmapIteratorImpl(c, o, it));
 }
 
@@ -12911,6 +12904,10 @@ int BlueStore::_deferred_replay()
   dout(10) << __func__ << " start" << dendl;
   int count = 0;
   int r = 0;
+  interval_set<uint64_t> bluefs_extents;
+  if (bluefs) {
+    bluefs->get_block_extents(bluefs_layout.shared_bdev, &bluefs_extents);
+  }
   CollectionRef ch = _get_collection(coll_t::meta());
   bool fake_ch = false;
   if (!ch) {
@@ -12936,10 +12933,15 @@ int BlueStore::_deferred_replay()
       r = -EIO;
       goto out;
     }
-    TransContext *txc = _txc_create(ch.get(), osr,  nullptr);
-    txc->deferred_txn = deferred_txn;
-    txc->set_state(TransContext::STATE_KV_DONE);
-    _txc_state_proc(txc);
+    bool has_some = _eliminate_outdated_deferred(deferred_txn, bluefs_extents);
+    if (has_some) {
+      TransContext *txc = _txc_create(ch.get(), osr,  nullptr);
+      txc->deferred_txn = deferred_txn;
+      txc->set_state(TransContext::STATE_KV_DONE);
+      _txc_state_proc(txc);
+    } else {
+      delete deferred_txn;
+    }
   }
  out:
   dout(20) << __func__ << " draining osr" << dendl;
@@ -12950,6 +12952,76 @@ int BlueStore::_deferred_replay()
   }
   dout(10) << __func__ << " completed " << count << " events" << dendl;
   return r;
+}
+
+bool BlueStore::_eliminate_outdated_deferred(bluestore_deferred_transaction_t* deferred_txn,
+					     interval_set<uint64_t>& bluefs_extents)
+{
+  bool has_some = false;
+  dout(30) << __func__ << " bluefs_extents: " << std::hex << bluefs_extents << std::dec << dendl;
+  auto it = deferred_txn->ops.begin();
+  while (it != deferred_txn->ops.end()) {
+    // We process a pair of _data_/_extents_ (here: it->data/it->extents)
+    // by eliminating _extents_ that belong to bluefs, removing relevant parts of _data_
+    // example:
+    // +------------+---------------+---------------+---------------+
+    // | data       | aaaaaaaabbbbb | bbbbcccccdddd | ddddeeeeeefff |
+    // | extent     | 40000 - 44000 | 50000 - 58000 | 58000 - 60000 |
+    // | in bluefs? |       no      |      yes      |       no      |
+    // +------------+---------------+---------------+---------------+
+    // result:
+    // +------------+---------------+---------------+
+    // | data       | aaaaaaaabbbbb | ddddeeeeeefff |
+    // | extent     | 40000 - 44000 | 58000 - 60000 |
+    // +------------+---------------+---------------+
+    PExtentVector new_extents;
+    ceph::buffer::list new_data;
+    uint32_t data_offset = 0; // this tracks location of extent 'e' inside it->data
+    dout(30) << __func__ << " input extents: " << it->extents << dendl;
+    for (auto& e: it->extents) {
+      interval_set<uint64_t> region;
+      region.insert(e.offset, e.length);
+
+      auto mi = bluefs_extents.lower_bound(e.offset);
+      if (mi != bluefs_extents.begin()) {
+	--mi;
+	if (mi.get_end() <= e.offset) {
+	  ++mi;
+	}
+      }
+      while (mi != bluefs_extents.end() && mi.get_start() < e.offset + e.length) {
+	// The interval_set does not like (asserts) when we erase interval that does not exist.
+	// Hence we do we implement (region-mi) by ((region+mi)-mi).
+	region.union_insert(mi.get_start(), mi.get_len());
+	region.erase(mi.get_start(), mi.get_len());
+	++mi;
+      }
+      // 'region' is now a subset of e, without parts used by bluefs
+      // we trim coresponding parts from it->data (actally constructing new_data / new_extents)
+      for (auto ki = region.begin(); ki != region.end(); ki++) {
+	ceph::buffer::list chunk;
+	// A chunk from it->data; data_offset is a an offset where 'e' was located;
+	// 'ki.get_start() - e.offset' is an offset of ki inside 'e'.
+	chunk.substr_of(it->data, data_offset + (ki.get_start() - e.offset), ki.get_len());
+	new_data.claim_append(chunk);
+	new_extents.emplace_back(bluestore_pextent_t(ki.get_start(), ki.get_len()));
+      }
+      data_offset += e.length;
+    }
+    dout(30) << __func__ << " output extents: " << new_extents << dendl;
+    if (it->data.length() != new_data.length()) {
+      dout(10) << __func__ << " trimmed deferred extents: " << it->extents << "->" << new_extents << dendl;
+    }
+    if (new_extents.size() == 0) {
+      it = deferred_txn->ops.erase(it);
+    } else {
+      has_some = true;
+      std::swap(it->extents, new_extents);
+      std::swap(it->data, new_data);
+      ++it;
+    }
+  }
+  return has_some;
 }
 
 // ---------------------------
@@ -15540,10 +15612,10 @@ int BlueStore::_clone(TransContext *txc,
       newo->onode.set_omap_flags(per_pool_omap == OMAP_BULK);
     }
     const string& prefix = newo->get_omap_prefix();
-    KeyValueDB::Iterator it = db->get_iterator(prefix);
     string head, tail;
     oldo->get_omap_header(&head);
     oldo->get_omap_tail(&tail);
+    KeyValueDB::Iterator it = db->get_iterator(prefix, 0, KeyValueDB::IteratorBounds{head, tail});
     it->lower_bound(head);
     while (it->valid()) {
       if (it->key() >= tail) {
