@@ -786,7 +786,7 @@ void PgScrubber::get_replicas_maps(bool replica_can_preempt)
   m_primary_scrubmap_pos.reset();
 
   // ask replicas to scan and send maps
-  for (const auto& i : m_pg->get_acting_recovery_backfill()) {
+  for (const auto& i : m_pg->get_actingset()) {
 
     if (i == m_pg_whoami)
       continue;
@@ -1293,7 +1293,7 @@ void PgScrubber::scrub_compare_maps()
   map<pg_shard_t, ScrubMap*> maps;
   maps[m_pg_whoami] = &m_primary_scrubmap;
 
-  for (const auto& i : m_pg->get_acting_recovery_backfill()) {
+  for (const auto& i : m_pg->get_actingset()) {
     if (i == m_pg_whoami)
       continue;
     dout(2) << __func__ << " replica " << i << " has "
@@ -1317,7 +1317,7 @@ void PgScrubber::scrub_compare_maps()
     m_osds->clog->warn(ss);
   }
 
-  if (m_pg->recovery_state.get_acting_recovery_backfill().size() > 1) {
+  if (m_pg->recovery_state.get_actingset().size() > 1) {
 
     dout(10) << __func__ << "  comparing replica scrub maps" << dendl;
 
@@ -1928,6 +1928,14 @@ PgScrubber::PgScrubber(PG* pg)
 {
   m_fsm = std::make_unique<ScrubMachine>(m_pg, this);
   m_fsm->initiate();
+}
+
+void PgScrubber::scrub_begin()
+{
+  stringstream ss;
+  ss << m_pg->info.pgid.pgid << " " << m_mode_desc << " starts";
+  dout(2) << ss.str() << dendl;
+  m_osds->clog->debug(ss);
 }
 
 void PgScrubber::reserve_replicas()

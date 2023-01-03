@@ -5090,13 +5090,14 @@ int BlueStore::_write_bdev_label(CephContext *cct,
   z.zero();
   bl.append(std::move(z));
 
-  int fd = TEMP_FAILURE_RETRY(::open(path.c_str(), O_WRONLY|O_CLOEXEC));
+  int fd = TEMP_FAILURE_RETRY(::open(path.c_str(), O_WRONLY|O_CLOEXEC|O_DIRECT));
   if (fd < 0) {
     fd = -errno;
     derr << __func__ << " failed to open " << path << ": " << cpp_strerror(fd)
 	 << dendl;
     return fd;
   }
+  bl.rebuild_aligned_size_and_memory(BDEV_LABEL_BLOCK_SIZE, BDEV_LABEL_BLOCK_SIZE, IOV_MAX);
   int r = bl.write_fd(fd);
   if (r < 0) {
     derr << __func__ << " failed to write to " << path
@@ -5949,6 +5950,11 @@ int BlueStore::close_db_environment()
 {
   _close_db_and_around(false);
   return 0;
+}
+
+/* gets access to bluefs supporting RocksDB */
+BlueFS* BlueStore::get_bluefs() {
+  return bluefs;
 }
 
 int BlueStore::_prepare_db_environment(bool create, bool read_only,
@@ -14365,6 +14371,18 @@ int BlueStore::_do_alloc_write(
 
   // compress (as needed) and calc needed space
   uint64_t need = 0;
+  uint64_t data_size = 0;
+  // 'need' is amount of space that must be provided by allocator.
+  // 'data_size' is a size of data that will be transferred to disk.
+  // Note that data_size is always <= need. This comes from:
+  // - write to blob was unaligned, and there is free space
+  // - data has been compressed
+  //
+  // We make one decision and apply it to all blobs.
+  // All blobs will be deferred or none will.
+  // We assume that allocator does its best to provide contiguous space,
+  // and the condition is : (data_size < deferred).
+
   auto max_bsize = std::max(wctx->target_blob_size, min_alloc_size);
   for (auto& wi : wctx->writes) {
     if (c && wi.blob_length > min_alloc_size) {
@@ -14411,6 +14429,7 @@ int BlueStore::_do_alloc_write(
 	  txc->statfs_delta.compressed_allocated() += result_len;
 	  logger->inc(l_bluestore_compress_success_count);
 	  need += result_len;
+	  data_size += result_len;
 	} else {
 	  rejected = true;
 	}
@@ -14423,6 +14442,7 @@ int BlueStore::_do_alloc_write(
 		 << dendl;
 	logger->inc(l_bluestore_compress_rejected_count);
 	need += wi.blob_length;
+	data_size += wi.bl.length();
       } else {
 	rejected = true;
       }
@@ -14437,6 +14457,7 @@ int BlueStore::_do_alloc_write(
 		 << std::dec << dendl;
 	logger->inc(l_bluestore_compress_rejected_count);
 	need += wi.blob_length;
+	data_size += wi.bl.length();
       }
       log_latency("compress@_do_alloc_write",
 	l_bluestore_compress_lat,
@@ -14444,10 +14465,11 @@ int BlueStore::_do_alloc_write(
 	cct->_conf->bluestore_log_op_age );
     } else {
       need += wi.blob_length;
+      data_size += wi.bl.length();
     }
   }
   PExtentVector prealloc;
-  prealloc.reserve(2 * wctx->writes.size());;
+  prealloc.reserve(2 * wctx->writes.size());
   int64_t prealloc_left = 0;
   prealloc_left = shared_alloc.a->allocate(
     need, min_alloc_size, need,
@@ -14474,10 +14496,10 @@ int BlueStore::_do_alloc_write(
     }
   }
 
-  dout(20) << __func__ << " prealloc " << prealloc << dendl;
+  dout(20) << __func__ << std::hex << " need=0x" << need << " data=0x" << data_size
+	   << " prealloc " << prealloc << dendl;
   auto prealloc_pos = prealloc.begin();
   ceph_assert(prealloc_pos != prealloc.end());
-  uint64_t prealloc_pos_length = prealloc_pos->length;
 
   for (auto& wi : wctx->writes) {
     bluestore_blob_t& dblob = wi.b->dirty_blob();
@@ -14540,20 +14562,15 @@ int BlueStore::_do_alloc_write(
 
     PExtentVector extents;
     int64_t left = final_length;
-    bool has_chunk2defer = false;
     auto prefer_deferred_size_snapshot = prefer_deferred_size.load();
     while (left > 0) {
       ceph_assert(prealloc_left > 0);
-      has_chunk2defer |= (prealloc_pos_length < prefer_deferred_size_snapshot);
       if (prealloc_pos->length <= left) {
 	prealloc_left -= prealloc_pos->length;
 	left -= prealloc_pos->length;
 	txc->statfs_delta.allocated() += prealloc_pos->length;
 	extents.push_back(*prealloc_pos);
 	++prealloc_pos;
-	if (prealloc_pos != prealloc.end()) {
-	  prealloc_pos_length = prealloc_pos->length;
-	}
       } else {
 	extents.emplace_back(prealloc_pos->offset, left);
 	prealloc_pos->offset += left;
@@ -14599,7 +14616,7 @@ int BlueStore::_do_alloc_write(
 
     // queue io
     if (!g_conf()->bluestore_debug_omit_block_device_write) {
-      if (has_chunk2defer && l->length() < prefer_deferred_size_snapshot) {
+      if (data_size < prefer_deferred_size_snapshot) {
 	dout(20) << __func__ << " deferring 0x" << std::hex
 		 << l->length() << std::dec << " write via deferred" << dendl;
 	bluestore_deferred_op_t *op = _get_deferred_op(txc, l->length());
@@ -16934,4 +16951,5 @@ void RocksDBBlueFSVolumeSelector::dump(ostream& sout) {
   }
 }
 
+// =======================================================
 // =======================================================
