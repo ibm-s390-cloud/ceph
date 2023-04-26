@@ -378,6 +378,7 @@ BuildRequires:	nss-devel
 BuildRequires:	keyutils-libs-devel
 BuildRequires:	libibverbs-devel
 BuildRequires:  librdmacm-devel
+BuildRequires:	libatomic
 BuildRequires:  ninja-build
 BuildRequires:  openldap-devel
 #BuildRequires:  krb5-devel
