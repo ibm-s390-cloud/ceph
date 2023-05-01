@@ -91,13 +91,13 @@ To drain all daemons from a host, run a command of the following form:
 The ``_no_schedule`` label will be applied to the host. See
 :ref:`cephadm-special-host-labels`.
 
-All osds on the host will be scheduled to be removed. You can check the progress of the osd removal operation with the following command:
+All OSDs on the host will be scheduled to be removed. You can check the progress of the OSD removal operation with the following command:
 
 .. prompt:: bash #
 
    ceph orch osd rm status
 
-See :ref:`cephadm-osd-removal` for more details about osd removal.
+See :ref:`cephadm-osd-removal` for more details about OSD removal.
 
 Use the following command to determine whether any daemons are still on the
 host:
@@ -245,9 +245,10 @@ Many hosts can be added at once using
     hostname: node-02
     addr: 192.168.0.12
 
-This can be combined with service specifications (below) to create a cluster spec
-file to deploy a whole cluster in one command.  see ``cephadm bootstrap --apply-spec``
-also to do this during bootstrap. Cluster SSH Keys must be copied to hosts prior to adding them.
+This can be combined with :ref:`service specifications<orchestrator-cli-service-spec>`
+to create a cluster spec file to deploy a whole cluster in one command.  see
+``cephadm bootstrap --apply-spec`` also to do this during bootstrap. Cluster
+SSH Keys must be copied to hosts prior to adding them.
 
 Setting the initial CRUSH location of host
 ==========================================
