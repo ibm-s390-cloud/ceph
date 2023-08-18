@@ -1,0 +1,7 @@
+os_type: ubuntu
+os_version: "23.04"
+
+tasks:
+- pexec:
+    all:
+    - sudo apt install docker docker.io docker-compose -y
