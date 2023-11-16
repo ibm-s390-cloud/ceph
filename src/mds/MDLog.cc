@@ -1426,6 +1426,7 @@ void MDLog::_replay_thread()
       le->_segment->num_events++;
       le->_segment->end = journaler->get_read_pos();
       num_events++;
+      logger->set(l_mdl_ev, num_events);
 
       {
         std::lock_guard l(mds->mds_lock);
@@ -1438,6 +1439,8 @@ void MDLog::_replay_thread()
     }
 
     logger->set(l_mdl_rdpos, pos);
+    logger->set(l_mdl_expos, journaler->get_expire_pos());
+    logger->set(l_mdl_wrpos, journaler->get_write_pos());
   }
 
   // done!
@@ -1491,6 +1494,9 @@ void MDLog::standby_trim_segments()
     dout(10) << " removing segment" << dendl;
     mds->mdcache->standby_trim_segment(seg);
     remove_oldest_segment();
+    if (pre_segments_size > 0) {
+      --pre_segments_size;
+    }
     removed_segment = true;
   }
 
