@@ -227,6 +227,13 @@ elseif(HAVE_POWER8)
 elseif(HAVE_ARMV8_CRC)
   list(APPEND crc32_srcs
     crc32c_aarch64.c)
+
+elseif(HAVE_S390X)
+  list(APPEND crc32_srcs
+    crc32c_s390x.c
+    crc32le-vx.S
+  )
+
 endif(HAVE_INTEL)
 
 add_library(crc32 STATIC ${crc32_srcs})
