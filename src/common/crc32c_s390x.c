@@ -42,10 +42,14 @@ unsigned int crc32_le(unsigned int crc, const unsigned char *buf, size_t len) {
 	return crc;
 }
 
-unsigned int crc32c_le(uint32_t crc, unsigned char const*buf, unsigned len){
+unsigned int crc32c_le(uint32_t crc, unsigned char const *buf, unsigned len){
 	crc = htole32(crc);
-	while (len--)
-		crc = crc32ctable_le[0][((crc >> 24) ^ *buf++) & 0xFF] ^ (crc << 8);
+	if(buf != 0)
+		while (len--)
+			crc = crc32ctable_le[0][((crc >> 24) ^ *buf++) & 0xFF] ^ (crc << 8);
+	else
+		while (len--)
+			crc = crc32ctable_le[0][((crc >> 24)) & 0xFF] ^ (crc << 8);
 	crc = le32toh(crc);
 	return crc;
 }
@@ -60,11 +64,17 @@ unsigned int crc32c_le(uint32_t crc, unsigned char const*buf, unsigned len){
  *
  */
 #define DEFINE_CRC32_VX(___fname, ___crc32_vx, ___crc32_sw)                 \
-	unsigned int ___fname(uint32_t crc,                             \
+	unsigned int ___fname(uint32_t crc,                                 \
 			      unsigned char const *data,                    \
-			      unsigned datalen)                               \
+			      unsigned datalen)                             \
 	{                                                                   \
 		unsigned long prealign, aligned, remaining;                 \
+		                                                            \
+		if(data == 0)                                               \
+			return ___crc32_sw(crc, data, datalen);                                         \
+		                                                            \
+		if(datalen < VX_MIN_LEN + VX_ALIGN_MASK)                    \
+			return ___crc32_sw(crc, data, datalen);             \
 		                                                            \
 		if ((unsigned long)data & VX_ALIGN_MASK) {                  \
 			prealign = VX_ALIGNMENT -                           \
