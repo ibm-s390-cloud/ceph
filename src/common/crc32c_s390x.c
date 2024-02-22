@@ -18,7 +18,7 @@
 /* Prototypes for functions in assembly files */
 unsigned int crc32_be_vgfm_16(unsigned int crc, const unsigned char *buf, size_t size);
 unsigned int crc32_le_vgfm_16(unsigned int crc, const unsigned char *buf, size_t size);
-unsigned int crc32c_be_vgfm_16(unsigned int crc, const unsigned char *buf, size_t size);
+unsigned int crc32c_be_vgfm_16(uint32_t crc, unsigned char const*buf, unsigned size);
 unsigned int crc32c_le_vgfm_16(uint32_t crc, unsigned char const*buf, unsigned size);
 
 /* Pure C implementations of CRC, one byte at a time */
@@ -28,9 +28,21 @@ unsigned int crc32_be(unsigned int crc, const unsigned char *buf, size_t len) {
 	return crc;
 }
 
+/*
 unsigned int crc32c_be(unsigned int crc, const unsigned char *buf, size_t len) {
 	while (len--)
 		crc = crc32ctable_be[0][((crc >> 24) ^ *buf++) & 0xFF] ^ (crc << 8);
+	return crc;
+}
+*/
+
+unsigned int crc32c_be(uint32_t crc, unsigned char const *buf, unsigned len) {
+	if(buf != 0)
+		while (len--)
+			crc = crc32ctable_be[0][((crc >> 24) ^ *buf++) & 0xFF] ^ (crc << 8);
+	else
+		while (len--)
+			crc = crc32ctable_be[0][((crc >> 24)) & 0xFF] ^ (crc << 8);
 	return crc;
 }
 
@@ -42,7 +54,7 @@ unsigned int crc32_le(unsigned int crc, const unsigned char *buf, size_t len) {
 	return crc;
 }
 
-unsigned int crc32c_le(uint32_t crc, unsigned char const *buf, unsigned len){
+unsigned int crc32c_le(uint32_t crc, unsigned char const *buf, unsigned len) {
 	crc = htole32(crc);
 	if(buf != 0)
 		while (len--)
@@ -102,6 +114,5 @@ unsigned int crc32c_le(uint32_t crc, unsigned char const *buf, unsigned len){
 /* Main CRC-32 functions */
 //DEFINE_CRC32_VX(crc32_be_vx, crc32_be_vgfm_16, crc32_be)
 //DEFINE_CRC32_VX(crc32_le_vx, crc32_le_vgfm_16, crc32_le)
-//DEFINE_CRC32_VX(crc32c_be_vx, crc32c_be_vgfm_16, crc32c_be)
-DEFINE_CRC32_VX(crc32c_le_vx, crc32c_le_vgfm_16, crc32c_le)
-
+DEFINE_CRC32_VX(crc32c_be_vx, crc32c_be_vgfm_16, crc32c_be)
+//DEFINE_CRC32_VX(crc32c_le_vx, crc32c_le_vgfm_16, crc32c_le)
