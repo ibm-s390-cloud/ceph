@@ -40,7 +40,7 @@ ceph_crc32c_func_t ceph_choose_crc32(void)
   }
 #elif defined(__s390__)
   if (ceph_arch_s390x_crc32) {
-    return crc32c_le_vx;
+    return ceph_crc32c_s390x;
   }
 #endif
   // default

@@ -31,7 +31,7 @@ unsigned int crc32c_le(uint32_t crc, unsigned char const *buf, unsigned len){
 	return crc;
 }
 
-unsigned int crc32c_le_vx(uint32_t crc, unsigned char const *data, unsigned datalen)
+unsigned int ceph_crc32c_s390x(uint32_t crc, unsigned char const *data, unsigned datalen)
 {
 	unsigned long prealign, aligned, remaining;
 
