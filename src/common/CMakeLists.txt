@@ -231,7 +231,6 @@ elseif(HAVE_ARMV8_CRC)
 elseif(HAVE_S390X)
   list(APPEND crc32_srcs
     crc32c_s390x.c
-    crc32le-vx.S
     crc32be-vx.S
   )
 endif(HAVE_INTEL)
