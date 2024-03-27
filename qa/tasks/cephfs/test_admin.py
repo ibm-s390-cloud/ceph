@@ -7,6 +7,7 @@ from io import StringIO
 from os.path import join as os_path_join
 
 from teuthology.exceptions import CommandFailedError
+from teuthology.contextutil import safe_while
 
 from tasks.cephfs.cephfs_test_case import CephFSTestCase, classhook
 from tasks.cephfs.filesystem import FileLayout, FSMissing
@@ -14,6 +15,58 @@ from tasks.cephfs.fuse_mount import FuseMount
 from tasks.cephfs.caps_helper import CapTester
 
 log = logging.getLogger(__name__)
+
+class TestLabeledPerfCounters(CephFSTestCase):
+    CLIENTS_REQUIRED = 2
+    MDSS_REQUIRED = 1
+
+    def test_per_client_labeled_perf_counters(self):
+        """
+        That the per-client labelled perf counters depict the clients
+        performaing IO.
+        """
+        def get_counters_for(filesystem, client_id):
+            dump = self.fs.rank_tell(["counter", "dump"])
+            per_client_metrics_key = f'mds_client_metrics-{filesystem}'
+            counters = [c["counters"] for \
+                        c in dump[per_client_metrics_key] if c["labels"]["client"] == client_id]
+            return counters[0]
+
+        # sleep a bit so that we get updated clients...
+        time.sleep(10)
+
+        # lookout for clients...
+        dump = self.fs.rank_tell(["counter", "dump"])
+
+        fs_suffix = dump["mds_client_metrics"][0]["labels"]["fs_name"]
+        self.assertGreaterEqual(dump["mds_client_metrics"][0]["counters"]["num_clients"], 2)
+
+        per_client_metrics_key = f'mds_client_metrics-{fs_suffix}'
+        mount_a_id = f'client.{self.mount_a.get_global_id()}'
+        mount_b_id = f'client.{self.mount_b.get_global_id()}'
+
+        clients = [c["labels"]["client"] for c in dump[per_client_metrics_key]]
+        self.assertIn(mount_a_id, clients)
+        self.assertIn(mount_b_id, clients)
+
+        # write workload
+        self.mount_a.create_n_files("test_dir/test_file", 1000, sync=True)
+        with safe_while(sleep=1, tries=30, action=f'wait for counters - {mount_a_id}') as proceed:
+            counters_dump_a = get_counters_for(fs_suffix, mount_a_id)
+            while proceed():
+                if counters_dump_a["total_write_ops"] > 0 and counters_dump_a["total_write_size"] > 0:
+                    return True
+
+        # read from the other client
+        for i in range(100):
+            self.mount_b.open_background(basename=f'test_dir/test_file_{i}', write=False)
+        with safe_while(sleep=1, tries=30, action=f'wait for counters - {mount_b_id}') as proceed:
+            counters_dump_b = get_counters_for(fs_suffix, mount_b_id)
+            while proceed():
+                if counters_dump_b["total_read_ops"] > 0 and counters_dump_b["total_read_size"] > 0:
+                    return True
+
+        self.fs.teardown()
 
 class TestAdminCommands(CephFSTestCase):
     """
@@ -1250,6 +1303,10 @@ class TestFsAuthorize(CephFSTestCase):
         self.captester.run_mds_cap_tests(PERM)
 
     def test_single_path_rootsquash(self):
+        if not isinstance(self.mount_a, FuseMount):
+            self.skipTest("only FUSE client has CEPHFS_FEATURE_MDS_AUTH_CAPS "
+                          "needed to enforce root_squash MDS caps")
+
         PERM = 'rw'
         FS_AUTH_CAPS = (('/', PERM, 'root_squash'),)
         self.captester = CapTester()
@@ -1259,7 +1316,36 @@ class TestFsAuthorize(CephFSTestCase):
         # Since root_squash is set in client caps, client can read but not
         # write even thought access level is set to "rw".
         self.captester.conduct_pos_test_for_read_caps()
+        self.captester.conduct_pos_test_for_open_caps()
         self.captester.conduct_neg_test_for_write_caps(sudo_write=True)
+        self.captester.conduct_neg_test_for_chown_caps()
+        self.captester.conduct_neg_test_for_truncate_caps()
+
+    def test_single_path_rootsquash_issue_56067(self):
+        """
+        That a FS client using root squash MDS caps allows non-root user to write data
+        to a file. And after client remount, the non-root user can read the data that
+        was previously written by it. https://tracker.ceph.com/issues/56067
+        """
+        if not isinstance(self.mount_a, FuseMount):
+            self.skipTest("only FUSE client has CEPHFS_FEATURE_MDS_AUTH_CAPS "
+                          "needed to enforce root_squash MDS caps")
+
+        keyring = self.fs.authorize(self.client_id, ('/', 'rw', 'root_squash'))
+        keyring_path = self.mount_a.client_remote.mktemp(data=keyring)
+        self.mount_a.remount(client_id=self.client_id,
+                             client_keyring_path=keyring_path,
+                             cephfs_mntpt='/')
+        filedata, filename = 'some data on fs 1', 'file_on_fs1'
+        filepath = os_path_join(self.mount_a.hostfs_mntpt, filename)
+        self.mount_a.write_file(filepath, filedata)
+
+        self.mount_a.remount(client_id=self.client_id,
+                             client_keyring_path=keyring_path,
+                             cephfs_mntpt='/')
+        if filepath.find(self.mount_a.hostfs_mntpt) != -1:
+            contents = self.mount_a.read_file(filepath)
+            self.assertEqual(filedata, contents)
 
     def test_single_path_authorize_on_nonalphanumeric_fsname(self):
         """

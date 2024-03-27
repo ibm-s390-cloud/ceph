@@ -564,7 +564,8 @@ private:
     CEPH_FEATUREMASK_SERVER_LUMINOUS |
     CEPH_FEATUREMASK_SERVER_MIMIC |
     CEPH_FEATUREMASK_SERVER_NAUTILUS |
-    CEPH_FEATUREMASK_SERVER_OCTOPUS;
+    CEPH_FEATUREMASK_SERVER_OCTOPUS |
+    CEPH_FEATUREMASK_SERVER_REEF;
 
   struct addrs_s {
     mempool::osdmap::vector<std::shared_ptr<entity_addrvec_t> > client_addrs;
@@ -654,6 +655,7 @@ private:
  public:
   bool have_crc() const { return crc_defined; }
   uint32_t get_crc() const { return crc; }
+  bool any_osd_laggy() const;
 
   std::shared_ptr<CrushWrapper> crush;       // hierarchical map
   bool stretch_mode_enabled; // we are in stretch mode, requiring multiple sites

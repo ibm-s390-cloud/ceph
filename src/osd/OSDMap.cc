@@ -587,9 +587,9 @@ void OSDMap::Incremental::encode(ceph::buffer::list& bl, uint64_t features) cons
       v = 5;
     } else if (!HAVE_FEATURE(features, SERVER_NAUTILUS)) {
       v = 6;
-    } /* else if (!HAVE_FEATURE(features, SERVER_REEF)) {
+    } else if (!HAVE_FEATURE(features, SERVER_REEF)) {
       v = 8;
-    } */
+    }
     ENCODE_START(v, 1, bl); // client-usable data
     encode(fsid, bl);
     encode(epoch, bl);
@@ -932,6 +932,10 @@ void OSDMap::Incremental::decode(ceph::buffer::list::const_iterator& bl)
     if (struct_v >= 8) {
       decode(new_last_up_change, bl);
       decode(new_last_in_change, bl);
+    }
+    if (struct_v >= 9) {
+      decode(new_pg_upmap_primary, bl);
+      decode(old_pg_upmap_primary, bl);
     }
     DECODE_FINISH(bl); // client-usable data
   }
@@ -1869,6 +1873,18 @@ void OSDMap::_calc_up_osd_features()
 uint64_t OSDMap::get_up_osd_features() const
 {
   return cached_up_osd_features;
+}
+
+bool OSDMap::any_osd_laggy() const
+{
+  for (int osd = 0; osd < max_osd; ++osd) {
+    if (!is_up(osd)) { continue; }
+    const auto &xi = get_xinfo(osd);
+    if (xi.laggy_probability || xi.laggy_interval) {
+      return true;
+    }
+  }
+  return false;
 }
 
 void OSDMap::dedup(const OSDMap *o, OSDMap *n)
@@ -2977,6 +2993,9 @@ bool OSDMap::primary_changed_broken(
 uint64_t OSDMap::get_encoding_features() const
 {
   uint64_t f = SIGNIFICANT_FEATURES;
+  if (require_osd_release < ceph_release_t::reef) {
+    f &= ~CEPH_FEATURE_SERVER_REEF;
+  }
   if (require_osd_release < ceph_release_t::octopus) {
     f &= ~CEPH_FEATURE_SERVER_OCTOPUS;
   }
@@ -3156,9 +3175,9 @@ void OSDMap::encode(ceph::buffer::list& bl, uint64_t features) const
       v = 6;
     } else if (!HAVE_FEATURE(features, SERVER_NAUTILUS)) {
       v = 7;
-    } /* else if (!HAVE_FEATURE(features, SERVER_REEF)) {
+    } else if (!HAVE_FEATURE(features, SERVER_REEF)) {
       v = 9;
-    } */
+    }
     ENCODE_START(v, 1, bl); // client-usable data
     // base
     encode(fsid, bl);

@@ -1667,7 +1667,11 @@ bool PrimaryLogPG::get_rw_locks(bool write_ordered, OpContext *ctx)
    * to get the second.
    */
   if (write_ordered && ctx->op->may_read()) {
-    ctx->lock_type = RWState::RWEXCL;
+    if (ctx->op->may_read_data()) {
+      ctx->lock_type = RWState::RWEXCL;
+    } else {
+      ctx->lock_type = RWState::RWWRITE;
+    }
   } else if (write_ordered) {
     ctx->lock_type = RWState::RWWRITE;
   } else {
@@ -15627,8 +15631,10 @@ PrimaryLogPG::AwaitAsyncWork::AwaitAsyncWork(my_context ctx)
     NamedState(nullptr, "Trimming/AwaitAsyncWork")
 {
   auto *pg = context< SnapTrimmer >().pg;
+  // Determine cost in terms of the average object size
+  uint64_t cost_per_object = pg->get_average_object_size();
   context< SnapTrimmer >().log_enter(state_name);
-  context< SnapTrimmer >().pg->osd->queue_for_snap_trim(pg);
+  context< SnapTrimmer >().pg->osd->queue_for_snap_trim(pg, cost_per_object);
   pg->state_set(PG_STATE_SNAPTRIM);
   pg->state_clear(PG_STATE_SNAPTRIM_ERROR);
   pg->publish_stats_to_osd();

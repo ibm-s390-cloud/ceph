@@ -210,18 +210,39 @@ class TestMisc(CephFSTestCase):
         fs_avail = float(fs_avail) * 1024
 
         ratio = raw_avail / fs_avail
-        assert 0.9 < ratio < 1.1
+        self.assertTrue(0.9 < ratio < 1.1)
 
     def test_dump_inode(self):
         info = self.fs.mds_asok(['dump', 'inode', '1'])
-        assert(info['path'] == "/")
+        self.assertEqual(info['path'], "/")
 
     def test_dump_inode_hexademical(self):
         self.mount_a.run_shell(["mkdir", "-p", "foo"])
         ino = self.mount_a.path_to_ino("foo")
-        assert type(ino) is int
+        self.assertTrue(type(ino) is int)
         info = self.fs.mds_asok(['dump', 'inode', hex(ino)])
-        assert info['path'] == "/foo"
+        self.assertEqual(info['path'], "/foo")
+
+    def test_dump_dir(self):
+        self.mount_a.run_shell(["mkdir", "-p", "foo/bar"])
+        dirs = self.fs.mds_asok(['dump', 'dir', '/foo'])
+        self.assertTrue(type(dirs) is list)
+        for dir in dirs:
+            self.assertEqual(dir['path'], "/foo")
+            self.assertFalse("dentries" in dir)
+        dirs = self.fs.mds_asok(['dump', 'dir', '/foo', '--dentry_dump'])
+        self.assertTrue(type(dirs) is list)
+        found_dentry = False
+        for dir in dirs:
+            self.assertEqual(dir['path'], "/foo")
+            self.assertTrue(type(dir['dentries']) is list)
+            if found_dentry:
+                continue
+            for dentry in dir['dentries']:
+                if dentry['path'] == "foo/bar":
+                    found_dentry = True
+                    break
+        self.assertTrue(found_dentry)
 
     def test_fs_lsflags(self):
         """
@@ -258,30 +279,30 @@ class TestMisc(CephFSTestCase):
                 self.mount_a.run_shell(["mkdir", os.path.join(dir_path, f"{i}_{j}")])
             start = time.time()
             if file_sync:
-                self.mount_a.run_shell(['python3', '-c', sync_dir_pyscript])
+                self.mount_a.run_shell(['python3', '-c', sync_dir_pyscript], timeout=4)
             else:
-                self.mount_a.run_shell(["sync"])
+                self.mount_a.run_shell(["sync"], timeout=4)
+            # the real duration should be less than the rough one
             duration = time.time() - start
-            log.info(f"sync mkdir i = {i}, duration = {duration}")
-            self.assertLess(duration, 4)
+            log.info(f"sync mkdir i = {i}, rough duration = {duration}")
 
             for j in range(5):
                 self.mount_a.run_shell(["rm", "-rf", os.path.join(dir_path, f"{i}_{j}")])
             start = time.time()
             if file_sync:
-                self.mount_a.run_shell(['python3', '-c', sync_dir_pyscript])
+                self.mount_a.run_shell(['python3', '-c', sync_dir_pyscript], timeout=4)
             else:
-                self.mount_a.run_shell(["sync"])
+                self.mount_a.run_shell(["sync"], timeout=4)
+            # the real duration should be less than the rough one
             duration = time.time() - start
-            log.info(f"sync rmdir i = {i}, duration = {duration}")
-            self.assertLess(duration, 4)
+            log.info(f"sync rmdir i = {i}, rough duration = {duration}")
 
         self.mount_a.run_shell(["rm", "-rf", dir_path])
 
     def test_filesystem_sync_stuck_for_around_5s(self):
         """
-        To check whether the fsync will be stuck to wait for the mdlog to be
-        flushed for at most 5 seconds.
+        To check whether the filesystem sync will be stuck to wait for the
+        mdlog to be flushed for at most 5 seconds.
         """
 
         dir_path = "filesystem_sync_do_not_wait_mdlog_testdir"
@@ -289,8 +310,8 @@ class TestMisc(CephFSTestCase):
 
     def test_file_sync_stuck_for_around_5s(self):
         """
-        To check whether the filesystem sync will be stuck to wait for the
-        mdlog to be flushed for at most 5 seconds.
+        To check whether the fsync will be stuck to wait for the mdlog to
+        be flushed for at most 5 seconds.
         """
 
         dir_path = "file_sync_do_not_wait_mdlog_testdir"
