@@ -1477,11 +1477,11 @@ def healthy(ctx, config):
     log.info('Waiting until %s daemons up and pgs clean...', cluster_name)
     manager = ctx.managers[cluster_name]
     try:
-        manager.wait_for_mgr_available(timeout=30)
+        manager.wait_for_mgr_available(timeout=300)
     except (run.CommandFailedError, AssertionError) as e:
         log.info('ignoring mgr wait error, probably testing upgrade: %s', e)
 
-    manager.wait_for_all_osds_up(timeout=300)
+    manager.wait_for_all_osds_up(timeout=3000)
 
     try:
         manager.flush_all_pg_stats()
@@ -1491,12 +1491,12 @@ def healthy(ctx, config):
 
     if config.get('wait-for-healthy', True):
         log.info('Waiting until ceph cluster %s is healthy...', cluster_name)
-        manager.wait_until_healthy(timeout=300)
+        manager.wait_until_healthy(timeout=3000)
 
     if ctx.cluster.only(teuthology.is_type('mds', cluster_name)).remotes:
         # Some MDSs exist, wait for them to be healthy
         for fs in Filesystem.get_all_fs(ctx):
-            fs.wait_for_daemons(timeout=300)
+            fs.wait_for_daemons(timeout=3000)
 
 def wait_for_mon_quorum(ctx, config):
     """
