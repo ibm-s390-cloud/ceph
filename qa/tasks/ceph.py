@@ -1465,6 +1465,21 @@ def run_daemon(ctx, config, type_):
         teuthology.stop_daemons_of_type(ctx, type_, cluster_name)
 
 
+@contextlib.contextmanager
+def disable_some_modules(ctx, config):
+    cluster_name = config['cluster']
+    first_mon = teuthology.get_first_mon(ctx, config, cluster_name)
+    (mon_remote,) = ctx.cluster.only(first_mon).remotes.keys()
+
+    mon_remote.run(
+        args=['sudo', 'ceph', '--cluster', cluster_name,
+              'mgr', 'module', 'disable', 'restful'])
+    mon_remote.run(
+        args=['sudo', 'ceph', '--cluster', cluster_name,
+              'mgr', 'module', 'disable', 'dashboard'])
+    yield
+
+
 def healthy(ctx, config):
     """
     Wait for all osd's to be up, and for the ceph health monitor to return HEALTH_OK.
@@ -1915,6 +1930,7 @@ def task(ctx, config):
             mon_bind_addrvec=config.get('mon_bind_addrvec', True),
         )),
         lambda: run_daemon(ctx=ctx, config=config, type_='mon'),
+        lambda: disable_some_modules(ctx=ctx, config=config),
         lambda: run_daemon(ctx=ctx, config=config, type_='mgr'),
         lambda: crush_setup(ctx=ctx, config=config),
         lambda: check_enable_crimson(ctx=ctx, config=config),
