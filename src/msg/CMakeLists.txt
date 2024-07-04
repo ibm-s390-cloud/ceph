@@ -71,3 +71,8 @@ if(WITH_DPDK)
   target_include_directories(common-msg-objs PRIVATE
     $<TARGET_PROPERTY:dpdk::dpdk,INTERFACE_INCLUDE_DIRECTORIES>)
 endif(WITH_DPDK)
+
+if(HAVE_SMCD)
+  list(APPEND msg_srcs
+    async/smcd/SMCDStack.cc)
+endif()
