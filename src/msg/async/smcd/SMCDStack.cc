@@ -38,13 +38,13 @@
 #define dout_prefix *_dout << "SMCDStack "
 
 class SMCDConnectedSocketImpl final : public ConnectedSocketImpl {
-  ceph::NetHandler &handler;
+  ceph::smcd::SMCDNetHandler &handler;
   int _fd;
   entity_addr_t sa;
   bool connected;
 
  public:
-  explicit SMCDConnectedSocketImpl(ceph::NetHandler &h, const entity_addr_t &sa,
+  explicit SMCDConnectedSocketImpl(ceph::smcd::SMCDNetHandler &h, const entity_addr_t &sa,
                                    int f, bool connected)
       : handler(h), _fd(f), sa(sa), connected(connected) {}
 
@@ -72,8 +72,7 @@ class SMCDConnectedSocketImpl final : public ConnectedSocketImpl {
 
   // return the sent length
   // < 0 means error occurred
-  static ssize_t do_sendmsg(int fd, struct msghdr &msg, unsigned len, bool more)
-  {
+  static ssize_t do_sendmsg(int fd, struct msghdr &msg, unsigned len, bool more) {
     size_t sent = 0;
     while (1) {
       MSGR_SIGPIPE_STOPPER;
@@ -174,15 +173,15 @@ class SMCDConnectedSocketImpl final : public ConnectedSocketImpl {
   }
 
   friend class SMCDServerSocketImpl;
-  friend class SMCDNetworkStack;
+  friend class SMCDStack;
 };
 
 class SMCDServerSocketImpl : public ServerSocketImpl {
-  ceph::NetHandler &handler;
+  ceph::smcd::SMCDNetHandler &handler;
   int _fd;
 
  public:
-  explicit SMCDServerSocketImpl(ceph::NetHandler &h, int f,
+  explicit SMCDServerSocketImpl(ceph::smcd::SMCDNetHandler &h, int f,
                                 const entity_addr_t& listen_addr, unsigned slot)
     : ServerSocketImpl(listen_addr.get_type(), slot),
       handler(h), _fd(f) {}
@@ -238,8 +237,7 @@ void SMCDWorker::initialize()
 int SMCDWorker::listen(entity_addr_t &sa,
                        unsigned addr_slot,
                        const SocketOptions &opt,
-                       ServerSocket *sock)
-{
+                       ServerSocket *sock) {
   int listen_sd = net.create_socket(sa.get_family(), true);
 
   if (listen_sd < 0) {
@@ -300,7 +298,7 @@ int SMCDWorker::connect(const entity_addr_t &addr, const SocketOptions &opts, Co
   return 0;
 }
 
-SMCDNetworkStack::SMCDNetworkStack(CephContext *c)
+SMCDStack::SMCDStack(CephContext *c)
     : NetworkStack(c)
 {
 }

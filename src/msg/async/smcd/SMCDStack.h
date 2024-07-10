@@ -25,7 +25,7 @@
 #include "Stack.h"
 
 class SMCDWorker : public Worker {
-  ceph::NetHandler net;
+  ceph::smcd::SMCDNetHandler net;
   void initialize() override;
 
  public:
@@ -38,7 +38,7 @@ class SMCDWorker : public Worker {
   int connect(const entity_addr_t &addr, const SocketOptions &opts, ConnectedSocket *socket) override;
 };
 
-class SMCDNetworkStack : public NetworkStack {
+class SMCDStack : public NetworkStack {
   std::vector<std::thread> threads;
 
   virtual Worker* create_worker(CephContext *c, unsigned worker_id) override {
@@ -46,7 +46,7 @@ class SMCDNetworkStack : public NetworkStack {
   }
 
  public:
-  explicit SMCDNetworkStack(CephContext *c);
+  explicit SMCDStack(CephContext *c);
 
   void spawn_worker(std::function<void ()> &&func) override {
     threads.emplace_back(std::move(func));

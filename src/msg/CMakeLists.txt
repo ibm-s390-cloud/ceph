@@ -74,5 +74,6 @@ endif(WITH_DPDK)
 
 if(HAVE_SMCD)
   list(APPEND msg_srcs
-    async/smcd/SMCDStack.cc)
+    async/smcd/SMCDStack.cc
+    async/smcd/SMCDNetHandler.cc)
 endif()
