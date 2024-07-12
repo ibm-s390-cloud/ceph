@@ -25,7 +25,6 @@
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
 
-#include "net_handler.h"
 #include "common/debug.h"
 #include "common/errno.h"
 #include "include/compat.h"
