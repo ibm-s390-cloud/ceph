@@ -72,8 +72,8 @@ if(WITH_DPDK)
     $<TARGET_PROPERTY:dpdk::dpdk,INTERFACE_INCLUDE_DIRECTORIES>)
 endif(WITH_DPDK)
 
-if(WITH_SMCD)
+if(HAVE_SMCD)
   list(APPEND msg_srcs
     async/smcd/SMCDStack.cc
     async/smcd/SMCDNetHandler.cc)
-endif(WITH_SMCD)
+endif()
