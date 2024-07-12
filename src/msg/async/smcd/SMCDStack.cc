@@ -301,4 +301,5 @@ int SMCDWorker::connect(const entity_addr_t &addr, const SocketOptions &opts, Co
 SMCDStack::SMCDStack(CephContext *c)
     : NetworkStack(c)
 {
+  ldout(cct, 20) << __func__ << " constructing SMCDStack ..." << dendl;
 }
