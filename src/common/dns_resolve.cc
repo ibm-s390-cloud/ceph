@@ -214,12 +214,12 @@ int DNSResolver::resolve_ip_addr(CephContext *cct, res_state *res, const string&
   int len;
   int family;
 
-  if(cct->_conf->ms_bind_ipv4) {
-    family = AF_INET;
-  } else if(cct->_conf->ms_bind_ipv6) {
+  if(cct->_conf->ms_bind_ipv6) {
     family = AF_INET6;
   } else if(cct->_conf->ms_bind_smc) {
     family = AF_SMC;
+  } else {
+    family = AF_INET;
   }
 
   int type = cct->_conf->ms_bind_ipv6 ? ns_t_aaaa : ns_t_a;
