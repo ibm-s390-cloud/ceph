@@ -13,6 +13,9 @@ bool matches_ipv6_in_subnet(const struct ifaddrs& addrs,
                             const struct sockaddr_in6* net,
                             unsigned int prefix_len);
 
+bool matches_smc_in_subnet(const struct ifaddrs& addrs,
+                           const struct sockaddr_in* net,
+                           unsigned int prefix_len);
 /*
  * Validate and parse IPv4 or IPv6 network
  *
@@ -38,6 +41,10 @@ void netmask_ipv6(const struct in6_addr *addr,
 void netmask_ipv4(const struct in_addr *addr,
 		  unsigned int prefix_len,
 		  struct in_addr *out);
+
+void netmask_smc(const struct in_addr *addr,
+                 unsigned int prefix_len,
+                 struct in_addr *out);
 
 bool network_contains(
 	const struct entity_addr_t& network,
