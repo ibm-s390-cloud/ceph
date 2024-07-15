@@ -369,7 +369,7 @@ int AsyncMessenger::bind(const entity_addr_t &bind_addr,
   auto a = bind_addr;
   if (a == entity_addr_t()) {
     a.set_type(entity_addr_t::TYPE_LEGACY);
-    if (cct->_conf->ms_bind_ipv4 {
+    if (cct->_conf->ms_bind_ipv4) {
       a.set_family(AF_INET);
     } else if (cct->_conf->ms_bind_ipv6) {
       a.set_family(AF_INET6);
