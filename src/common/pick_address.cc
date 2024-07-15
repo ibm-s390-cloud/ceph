@@ -466,7 +466,7 @@ int pick_addresses(
   // ipv4 and/or ipv6?
   if (addrs->v.empty()) {
     addr.set_type(entity_addr_t::TYPE_MSGR2);
-    for (auto pick_mask : {CEPH_PICK_ADDRESS_IPV4, CEPH_PICK_ADDRESS_IPV6 CEPH_PICK_ADDRESS_SMC}) {
+    for (auto pick_mask : {CEPH_PICK_ADDRESS_IPV4, CEPH_PICK_ADDRESS_IPV6, CEPH_PICK_ADDRESS_SMC}) {
       if (ipv & pick_mask) {
         if(pick_mask == CEPH_PICK_ADDRESS_IPV4) {
           addr.set_family(AF_INET);
