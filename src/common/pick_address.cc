@@ -70,6 +70,10 @@ static int is_loopback_addr(sockaddr* addr)
   } else if (addr->sa_family == AF_INET6) {
     sockaddr_in6* sin6 = (struct sockaddr_in6 *)(addr);
     return IN6_IS_ADDR_LOOPBACK(&sin6->sin6_addr) ? 1 : 0;
+  } else if (addr->sa_family == AF_SMC) {
+    const sockaddr_in* sin = (struct sockaddr_in *)(addr);
+    const in_addr_t net = ntohl(sin->sin_addr.s_addr) >> IN_CLASSA_NSHIFT;
+    return net == IN_LOOPBACKNET ? 1 : 0;
   } else {
     return -1;
   }
@@ -113,6 +117,11 @@ bool matches_with_net(const ifaddrs& ifa,
   case AF_INET6:
     if (ipv & CEPH_PICK_ADDRESS_IPV6) {
       return matches_ipv6_in_subnet(ifa, (struct sockaddr_in6*)net, prefix_len);
+    }
+    break;
+  case AF_SMC:
+    if (ipv & CEPH_PICK_ADDRESS_SMC) {
+      return matches_smc_in_subnet(ifa, (struct sockaddr_in*)net, prefix_len);
     }
     break;
   }
@@ -224,7 +233,7 @@ static void fill_in_one_address(CephContext *cct,
   const struct sockaddr *found = find_ip_in_subnet_list(
     cct,
     ifa,
-    CEPH_PICK_ADDRESS_IPV4|CEPH_PICK_ADDRESS_IPV6,
+    CEPH_PICK_ADDRESS_IPV4|CEPH_PICK_ADDRESS_IPV6|CEPH_PICK_ADDRESS_SMC,
     networks,
     interfaces,
     numa_node);
@@ -315,12 +324,14 @@ static std::optional<entity_addr_t> get_one_address(
 							numa_node);
   if (!found) {
     std::string_view ip_type;
-    if ((ipv & CEPH_PICK_ADDRESS_IPV4) && (ipv & CEPH_PICK_ADDRESS_IPV6)) {
+    if ((ipv & CEPH_PICK_ADDRESS_IPV4) && (ipv & CEPH_PICK_ADDRESS_IPV6) && (ipv & CEPH_PICK_ADDRESS_SMC)) {
       ip_type = "IPv4 or IPv6";
     } else if (ipv & CEPH_PICK_ADDRESS_IPV4) {
       ip_type = "IPv4";
-    } else {
+    } else  if (ipv & CEPH_PICK_ADDRESS_IPV6) {
       ip_type = "IPv6";
+    } else  if (ipv & CEPH_PICK_ADDRESS_SMC) {
+      ip_type = "smc";
     }
     lderr(cct) << "unable to find any " << ip_type << " address in networks '"
                << networks << "' interfaces '" << interfaces << "'" << dendl;
@@ -383,14 +394,16 @@ int pick_addresses(
       return -EINVAL;
     }
   }
-  unsigned ipv = flags & (CEPH_PICK_ADDRESS_IPV4 |
-			  CEPH_PICK_ADDRESS_IPV6);
+  unsigned ipv = flags & (CEPH_PICK_ADDRESS_IPV4 | CEPH_PICK_ADDRESS_IPV6 | CEPH_PICK_ADDRESS_SMC);
   if (ipv == 0) {
     if (cct->_conf.get_val<bool>("ms_bind_ipv4")) {
       ipv |= CEPH_PICK_ADDRESS_IPV4;
     }
     if (cct->_conf.get_val<bool>("ms_bind_ipv6")) {
       ipv |= CEPH_PICK_ADDRESS_IPV6;
+    }
+    if (cct->_conf.get_val<bool>("ms_bind_smc")) {
+      ipv |= CEPH_PICK_ADDRESS_SMC;
     }
     if (ipv == 0) {
       return -EINVAL;
@@ -433,7 +446,7 @@ int pick_addresses(
   if (addr.is_blank_ip() &&
       !networks.empty()) {
     // note: pass in ipv to filter the matching addresses
-    for (auto pick_mask :  {CEPH_PICK_ADDRESS_IPV4, CEPH_PICK_ADDRESS_IPV6}) {
+    for (auto pick_mask :  {CEPH_PICK_ADDRESS_IPV4, CEPH_PICK_ADDRESS_IPV6, CEPH_PICK_ADDRESS_SMC}) {
       if (ipv & pick_mask) {
         auto ip_addr = get_one_address(cct, ifa, pick_mask,
                                        networks, interfaces,
@@ -453,9 +466,15 @@ int pick_addresses(
   // ipv4 and/or ipv6?
   if (addrs->v.empty()) {
     addr.set_type(entity_addr_t::TYPE_MSGR2);
-    for (auto pick_mask : {CEPH_PICK_ADDRESS_IPV4, CEPH_PICK_ADDRESS_IPV6}) {
+    for (auto pick_mask : {CEPH_PICK_ADDRESS_IPV4, CEPH_PICK_ADDRESS_IPV6 CEPH_PICK_ADDRESS_SMC}) {
       if (ipv & pick_mask) {
-        addr.set_family(pick_mask == CEPH_PICK_ADDRESS_IPV4 ? AF_INET : AF_INET6);
+        if(pick_mask == CEPH_PICK_ADDRESS_IPV4) {
+          addr.set_family(AF_INET);
+        } else if(pick_mask == CEPH_PICK_ADDRESS_IPV6) {
+          addr.set_family(AF_INET6);
+        } else if(pick_mask == CEPH_PICK_ADDRESS_SMC) {
+          addr.set_family(AF_SMC);
+        }
         addrs->v.push_back(addr);
       }
     }
@@ -532,7 +551,7 @@ std::string pick_iface(CephContext *cct, const struct sockaddr_storage &network)
   const unsigned int prefix_len = std::max(sizeof(in_addr::s_addr), sizeof(in6_addr::s6_addr)) * CHAR_BIT;
   for (auto addr = ifa; addr != nullptr; addr = addr->ifa_next) {
     if (matches_with_net(*ifa, (const struct sockaddr *) &network, prefix_len,
-			 CEPH_PICK_ADDRESS_IPV4 | CEPH_PICK_ADDRESS_IPV6)) {
+			 CEPH_PICK_ADDRESS_IPV4 | CEPH_PICK_ADDRESS_IPV6 | CEPH_PICK_ADDRESS_SMC)) {
       return addr->ifa_name;
     }
   }

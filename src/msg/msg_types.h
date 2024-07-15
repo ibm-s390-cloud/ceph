@@ -323,6 +323,8 @@ struct entity_addr_t {
       return sizeof(u.sin);
     case AF_INET6:
       return sizeof(u.sin6);
+    case AF_SMC:
+      return sizeof(u.sin);
     }
     return sizeof(u);
   }
@@ -338,6 +340,11 @@ struct entity_addr_t {
       // pre-zero, since we're only copying a portion of the source
       memset(&u, 0, sizeof(u));
       memcpy(&u.sin6, sa, sizeof(u.sin6));
+      break;
+    case AF_SMC:
+      // pre-zero, since we're only copying a portion of the source
+      memset(&u, 0, sizeof(u));
+      memcpy(&u.sin, sa, sizeof(u.sin));
       break;
     case AF_UNSPEC:
       memset(&u, 0, sizeof(u));
@@ -368,6 +375,9 @@ struct entity_addr_t {
     case AF_INET6:
       u.sin6.sin6_port = htons(port);
       break;
+    case AF_SMC:
+      u.sin.sin_port = htons(port);
+      break;
     default:
       ceph_abort();
     }
@@ -378,6 +388,8 @@ struct entity_addr_t {
       return ntohs(u.sin.sin_port);
     case AF_INET6:
       return ntohs(u.sin6.sin6_port);
+    case AF_SMC:
+      return ntohs(u.sin.sin_port);
     }
     return 0;
   }
@@ -414,6 +426,8 @@ struct entity_addr_t {
       return memcmp(u.sin6.sin6_addr.s6_addr,
 		    o.u.sin6.sin6_addr.s6_addr,
 		    sizeof(u.sin6.sin6_addr.s6_addr)) == 0;
+    if (u.sa.sa_family == AF_SMC)
+      return u.sin.sin_addr.s_addr == o.u.sin.sin_addr.s_addr;
     return false;
   }
 
@@ -423,6 +437,8 @@ struct entity_addr_t {
       return u.sin.sin_addr.s_addr == INADDR_ANY;
     case AF_INET6:
       return memcmp(&u.sin6.sin6_addr, &in6addr_any, sizeof(in6addr_any)) == 0;
+    case AF_SMC:
+      return u.sin.sin_addr.s_addr == INADDR_ANY;
     default:
       return true;
     }

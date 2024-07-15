@@ -81,6 +81,38 @@ bool matches_ipv6_in_subnet(const struct ifaddrs& addrs,
   return IN6_ARE_ADDR_EQUAL(&temp, &want);
 }
 
+void netmask_smc(const struct in_addr *addr,
+                 unsigned int prefix_len,
+                 struct in_addr *out) {
+  uint32_t mask;
+
+  if (prefix_len >= 32) {
+    // also handle 32 in this branch, because >>32 is not defined by
+    // the C standards
+    mask = ~uint32_t(0);
+  } else {
+    mask = htonl(~(~uint32_t(0) >> prefix_len));
+  }
+  out->s_addr = addr->s_addr & mask;
+}
+
+bool matches_smc_in_subnet(const struct ifaddrs& addrs,
+                           const struct sockaddr_in* net,
+                           unsigned int prefix_len)
+{
+  if (addrs.ifa_addr == nullptr)
+    return false;
+
+  if (addrs.ifa_addr->sa_family != net->sin_family)
+      return false;
+  struct in_addr want;
+  netmask_smc(&net->sin_addr, prefix_len, &want);
+  struct in_addr *cur = &((struct sockaddr_in*)addrs.ifa_addr)->sin_addr;
+  struct in_addr temp;
+  netmask_smc(cur, prefix_len, &temp);
+  return temp.s_addr == want.s_addr;
+}
+
 bool parse_network(const char *s, struct sockaddr_storage *network, unsigned int *prefix_len) {
   char *slash = strchr((char*)s, '/');
   if (!slash) {
@@ -123,6 +155,13 @@ bool parse_network(const char *s, struct sockaddr_storage *network, unsigned int
   ok = inet_pton(AF_INET6, addr, &((struct sockaddr_in6*)network)->sin6_addr);
   if (ok) {
     network->ss_family = AF_INET6;
+    return true;
+  }
+
+  // try parsing as smc-d
+  ok = inet_pton(AF_SMC, addr, &((struct sockaddr_in*)network)->sin_addr);
+  if (ok) {
+    network->ss_family = AF_SMC;
     return true;
   }
 
@@ -172,6 +211,16 @@ bool network_contains(
 	&((const sockaddr_in6*)addr.get_sockaddr())->sin6_addr, prefix_len, &b);
       if (memcmp(&a, &b, sizeof(a)) == 0) {
 	return true;
+      }
+    }
+    break;
+  case AF_SMC:
+    {
+      struct in_addr a, b;
+      netmask_ipv4(&((const sockaddr_in*)network.get_sockaddr())->sin_addr, prefix_len, &a);
+      netmask_ipv4(&((const sockaddr_in*)addr.get_sockaddr())->sin_addr, prefix_len, &b);
+      if (memcmp(&a, &b, sizeof(a)) == 0) {
+        return true;
       }
     }
     break;

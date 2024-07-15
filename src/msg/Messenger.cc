@@ -68,8 +68,8 @@ void Messenger::set_endpoint_addr(const entity_addr_t& a,
     hostlen = sizeof(struct sockaddr_in);
   else if (a.get_family() == AF_INET6)
     hostlen = sizeof(struct sockaddr_in6);
-  else
-    hostlen = 0;
+  else if (a.get_family() == AF_SMC)
+    hostlen = sizeof(struct sockaddr_in);
 
   if (hostlen) {
     char buf[NI_MAXHOST] = { 0 };

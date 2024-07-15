@@ -44,7 +44,8 @@ int getifaddrs(struct ifaddrs **ifap)
          unicast_addrs = unicast_addrs->Next) {
       SOCKADDR* unicast_sockaddr = unicast_addrs->Address.lpSockaddr;
       if (unicast_sockaddr->sa_family != AF_INET &&
-          unicast_sockaddr->sa_family != AF_INET6)
+          unicast_sockaddr->sa_family != AF_INET6 &&
+          unicast_sockaddr->sa_family != AF_SMC)
         continue;
       out_list_curr = (struct ifaddrs*)calloc(sizeof(*out_list_curr), 1);
       if (!out_list_curr) {

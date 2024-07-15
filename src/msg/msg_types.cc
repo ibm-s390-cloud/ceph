@@ -176,6 +176,10 @@ bool entity_addr_t::parse(const char *s, const char **end, int default_type)
     u.sa.sa_family = AF_INET6;
     memcpy(&u.sin6.sin6_addr, &a6, sizeof(a6));
     p = start + strlen(buf6);
+  } else if (inet_pton(AF_SMC, buf4, &a4)) {
+    u.sin.sin_addr.s_addr = a4.s_addr;
+    u.sa.sa_family = AF_SMC;
+    p = start + strlen(buf4);
   } else {
     return false;
   }
@@ -262,6 +266,12 @@ std::ostream& operator<<(std::ostream& out, const sockaddr *psa)
       inet_ntop(AF_INET6, &sa->sin6_addr, buf, NI_MAXHOST);
       return out << '[' << buf << "]:"
 		 << ntohs(sa->sin6_port);
+    }
+  case AF_SMC:
+    {
+      const sockaddr_in *sa = (const sockaddr_in*)psa;
+      inet_ntop(AF_SMC, &sa->sin_addr, buf, NI_MAXHOST);
+      return out << buf << ':' << ntohs(sa->sin_port);
     }
   default:
     return out << "(unrecognized address family " << psa->sa_family << ")";
@@ -421,6 +431,10 @@ std::string entity_addr_t::ip_only_to_str() const
   case AF_INET6:
     host_ip = inet_ntop(AF_INET6, &in6_addr().sin6_addr, 
                         addr_buf, INET6_ADDRSTRLEN);
+    break;
+  case AF_SMC:
+    host_ip = inet_ntop(AF_SMC, &in4_addr().sin_addr, 
+                        addr_buf, INET_ADDRSTRLEN);
     break;
   default:
     break;

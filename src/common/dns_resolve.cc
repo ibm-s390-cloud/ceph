@@ -212,7 +212,16 @@ int DNSResolver::resolve_ip_addr(CephContext *cct, res_state *res, const string&
 
   u_char nsbuf[NS_PACKETSZ];
   int len;
-  int family = cct->_conf->ms_bind_ipv6 ? AF_INET6 : AF_INET;
+  int family;
+
+  if(cct->_conf->ms_bind_ipv4) {
+    family = AF_INET;
+  } else if(cct->_conf->ms_bind_ipv6) {
+    family = AF_INET6;
+  } else if(cct->_conf->ms_bind_smc) {
+    family = AF_SMC;
+  }
+
   int type = cct->_conf->ms_bind_ipv6 ? ns_t_aaaa : ns_t_a;
 
 #ifdef HAVE_RES_NQUERY
