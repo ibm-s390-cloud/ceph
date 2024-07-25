@@ -20,9 +20,8 @@
 #include <thread>
 
 #include "msg/msg_types.h"
-#include "msg/async/net_handler.h"
-
 #include "msg/async/Stack.h"
+#include "SMCDNetHandler.h"
 
 class SMCDWorker : public Worker {
   ceph::smcd::SMCDNetHandler net;
