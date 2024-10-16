@@ -49,6 +49,13 @@ ifneq (,$(filter with_system_libs,$(DEB_BUILD_OPTIONS)))
   extraopts += -DWITH_SYSTEM_PMDK=ON
 endif
 
+extraopts += -DWITH_QATLIB=OFF
+extraopts += -DWITH_QATZIP=OFF
+extraopts += -DWITH_CCACHE=ON
+extraopts += -DWITH_MGR_DASHBOARD_FRONTEND=OFF
+extraopts += -DALLOCATOR=libc
+extraopts += -DCMAKE_BUILD_TYPE=Release
+
 # for python3-${pkg} packages
 py3_bindings := rados cephfs rbd rgw ceph-argparse ceph-common
 # for packages with its own py3dist-overrides files, those file should be named
