@@ -53,7 +53,7 @@ extraopts += -DWITH_QATLIB=OFF
 extraopts += -DWITH_QATZIP=OFF
 extraopts += -DWITH_CCACHE=ON
 extraopts += -DWITH_MGR_DASHBOARD_FRONTEND=OFF
-extraopts += -DALLOCATOR=libc
+extraopts += -DALLOCATOR=tcmalloc
 extraopts += -DCMAKE_BUILD_TYPE=Release
 
 # for python3-${pkg} packages
