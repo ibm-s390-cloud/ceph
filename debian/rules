@@ -55,6 +55,7 @@ extraopts += -DWITH_CCACHE=ON
 extraopts += -DWITH_MGR_DASHBOARD_FRONTEND=OFF
 extraopts += -DALLOCATOR=libc
 extraopts += -DCMAKE_BUILD_TYPE=Release
+extraopts += -DCMAKE_CXX_FLAGS="-fno-lto"
 
 # for python3-${pkg} packages
 py3_bindings := rados cephfs rbd rgw ceph-argparse ceph-common
