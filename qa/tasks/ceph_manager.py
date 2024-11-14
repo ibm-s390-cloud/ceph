@@ -2578,6 +2578,7 @@ class CephManager:
         return json.loads('\n'.join(out.split('\n')[1:]))
 
     def get_mgr_dump(self):
+        self.raw_cluster_cmd('mgr', 'module', 'disable', 'restful')
         out = self.raw_cluster_cmd('mgr', 'dump', '--format=json')
         return json.loads(out)
 
