@@ -2720,6 +2720,7 @@ Traceback (most recent call last):
             cephadm_module.cache.facts = facts
             assert cephadm_module._validate_tunedprofile_settings(spec) == expected_value
 
+    @mock.patch("cephadm.CephadmOrchestrator.set_maintenance_healthcheck", lambda _: None)
     @mock.patch("cephadm.serve.CephadmServe._run_cephadm", _run_cephadm('[]'))
     def test_tuned_profiles_validation(self, cephadm_module):
         with with_host(cephadm_module, 'test'):
@@ -2840,16 +2841,23 @@ Traceback (most recent call last):
             with cephadm_module.async_timeout_handler('hostC', 'very slow', 999):
                 cephadm_module.wait_async(_timeout())
 
+    @mock.patch("cephadm.serve.CephadmServe._run_cephadm", _run_cephadm('[]'))
     @mock.patch("cephadm.CephadmOrchestrator.remove_osds")
     @mock.patch("cephadm.CephadmOrchestrator.add_host_label", lambda *a, **kw: None)
     @mock.patch("cephadm.inventory.HostCache.get_daemons_by_host", lambda *a, **kw: [])
     def test_host_drain_zap(self, _rm_osds, cephadm_module):
         # pass force=true in these tests to bypass _admin label check
-        cephadm_module.drain_host('host1', force=True, zap_osd_devices=False)
-        assert _rm_osds.called_with([], zap=False)
+        with with_host(cephadm_module, 'test', refresh_hosts=False, rm_with_force=True):
+            cephadm_module.drain_host('test', force=True, zap_osd_devices=False)
+            assert _rm_osds.called_with([], zap=False)
 
-        cephadm_module.drain_host('host1', force=True, zap_osd_devices=True)
-        assert _rm_osds.called_with([], zap=True)
+        with with_host(cephadm_module, 'test', refresh_hosts=False, rm_with_force=True):
+            cephadm_module.drain_host('test', force=True, zap_osd_devices=True)
+            assert _rm_osds.called_with([], zap=True)
+
+        with pytest.raises(OrchestratorError, match=r"Cannot find host 'host1' in the inventory."):
+            cephadm_module.drain_host('host1', force=True, zap_osd_devices=True)
+            assert _rm_osds.called_with([], zap=True)
 
     def test_process_ls_output(self, cephadm_module):
         sample_ls_output = """[

@@ -6794,9 +6794,8 @@ void BlueStore::_main_bdev_label_try_reserve()
   vector<uint64_t> candidate_positions;
   vector<uint64_t> accepted_positions;
   uint64_t lsize = std::max(BDEV_LABEL_BLOCK_SIZE, min_alloc_size);
-  for (size_t i = 1; i < bdev_label_positions.size(); i++) {
-    uint64_t location = bdev_label_positions[i];
-    if (location + lsize <= bdev->get_size()) {
+  for (uint64_t location : bdev_label_valid_locations) {
+    if (location != BDEV_FIRST_LABEL_POSITION) {
       candidate_positions.push_back(location);
     }
   }
@@ -11497,9 +11496,7 @@ int BlueStore::_fsck_on_open(BlueStore::FSCKDepth depth, bool repair)
     string p = path + "/block";
     _write_bdev_label(cct, bdev, p, bdev_label, bdev_labels_in_repair);
     for (uint64_t pos : bdev_labels_in_repair) {
-      if (pos != BDEV_FIRST_LABEL_POSITION) {
-        bdev_label_valid_locations.push_back(pos);
-      }
+      bdev_label_valid_locations.push_back(pos);
     }
     repaired += bdev_labels_in_repair.size();
   }
@@ -14132,6 +14129,7 @@ void BlueStore::_txc_state_proc(TransContext *txc)
 	if (txc->had_ios)
 	  kv_ios++;
 	kv_throttle_costs += txc->cost;
+	++kv_throttle_txcs;
       }
       return;
     case TransContext::STATE_KV_SUBMITTED:
@@ -14378,7 +14376,18 @@ void BlueStore::_txc_committed_kv(TransContext *txc)
     mono_clock::now() - txc->start,
     cct->_conf->bluestore_log_op_age,
     [&](auto lat) {
-      return ", txc = " + stringify(txc);
+      return ", txc = " + stringify(txc) +
+             ", txc bytes = " + stringify(txc->bytes) +
+             ", txc ios = " + stringify(txc->ios) +
+             ", txc cost = " + stringify(txc->cost) +
+             ", txc onodes = " + stringify(txc->onodes.size()) +
+             ", DB updates = " + stringify(txc->t->get_count()) +
+             ", DB bytes = " + stringify(txc->t->get_size_bytes()) +
+             ", cost max = " + stringify(throttle.bytes_observed_max) +
+               " on " + stringify(throttle.bytes_max_ts) +
+             ", txc max = " + stringify(throttle.transactions_observed_max) +
+               " on " + stringify(throttle.transactions_max_ts)
+             ;
     },
     l_bluestore_slow_committed_kv_count
   );
@@ -14728,7 +14737,7 @@ void BlueStore::_kv_sync_thread()
     } else {
       deque<TransContext*> kv_submitting;
       deque<DeferredBatch*> deferred_done, deferred_stable;
-      uint64_t aios = 0, costs = 0;
+      uint64_t aios = 0, costs = 0, txcs = 0;
 
       dout(20) << __func__ << " committing " << kv_queue.size()
 	       << " submitting " << kv_queue_unsubmitted.size()
@@ -14741,8 +14750,10 @@ void BlueStore::_kv_sync_thread()
       deferred_stable.swap(deferred_stable_queue);
       aios = kv_ios;
       costs = kv_throttle_costs;
+      txcs = kv_throttle_txcs;
       kv_ios = 0;
       kv_throttle_costs = 0;
+      kv_throttle_txcs = 0;
       l.unlock();
 
       dout(30) << __func__ << " committing " << kv_committing << dendl;
@@ -14838,7 +14849,7 @@ void BlueStore::_kv_sync_thread()
       // iteration there will already be ops awake.  otherwise, we
       // end up going to sleep, and then wake up when the very first
       // transaction is ready for commit.
-      throttle.release_kv_throttle(costs);
+      throttle.release_kv_throttle(costs, txcs);
 
       // cleanup sync deferred keys
       for (auto b : deferred_stable) {
@@ -18640,6 +18651,20 @@ bool BlueStore::BlueStoreThrottle::try_start_transaction(
   TransContext &txc,
   mono_clock::time_point start_throttle_acquire)
 {
+  {
+    std::lock_guard l(lock);
+    auto cost0 = throttle_bytes.get_current();
+    if (cost0 + txc.cost > bytes_observed_max) {
+      bytes_observed_max = cost0 + txc.cost;
+      bytes_max_ts = ceph_clock_now();
+    }
+    auto txcs = ++transactions;
+    if (txcs > transactions_observed_max) {
+      transactions_observed_max = txcs;
+      transactions_max_ts = ceph_clock_now();
+    }
+  }
+
   throttle_bytes.get(txc.cost);
 
   if (!txc.deferred_txn || throttle_deferred_bytes.get_or_fail(txc.cost)) {
@@ -20571,6 +20596,14 @@ int BlueStore::read_allocation_from_drive_for_bluestore_tool()
     ret = add_existing_bluefs_allocation(allocator.get(), stats);
     if (ret < 0) {
       return ret;
+    }
+    if (bdev_label_multi) {
+      uint64_t lsize = std::max(BDEV_LABEL_BLOCK_SIZE, min_alloc_size);
+      for (uint64_t p : bdev_label_valid_locations) {
+	if (p != BDEV_FIRST_LABEL_POSITION) {
+	  allocator->init_rm_free(p, lsize);
+	}
+      }
     }
 
     duration = ceph_clock_now() - start;

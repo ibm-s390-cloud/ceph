@@ -1340,6 +1340,8 @@ class NvmeofServiceSpec(ServiceSpec):
                  allowed_consecutive_spdk_ping_failures: Optional[int] = 1,
                  spdk_ping_interval_in_seconds: Optional[float] = 2.0,
                  ping_spdk_under_lock: Optional[bool] = False,
+                 max_hosts_per_namespace: Optional[int] = 1,
+                 max_namespaces_with_netmask: Optional[int] = 1000,
                  server_key: Optional[str] = None,
                  server_cert: Optional[str] = None,
                  client_key: Optional[str] = None,
@@ -1348,7 +1350,9 @@ class NvmeofServiceSpec(ServiceSpec):
                  spdk_path: Optional[str] = None,
                  tgt_path: Optional[str] = None,
                  spdk_timeout: Optional[float] = 60.0,
-                 spdk_log_level: Optional[str] = 'WARNING',
+                 spdk_log_level: Optional[str] = '',
+                 spdk_protocol_log_level: Optional[str] = 'WARNING',
+                 spdk_log_file_dir: Optional[str] = '',
                  rpc_socket_dir: Optional[str] = '/var/tmp/',
                  rpc_socket_name: Optional[str] = 'spdk.sock',
                  conn_retries: Optional[int] = 10,
@@ -1368,6 +1372,7 @@ class NvmeofServiceSpec(ServiceSpec):
                  log_directory: Optional[str] = '/var/log/ceph/',
                  monitor_timeout: Optional[float] = 1.0,
                  enable_monitor_client: bool = True,
+                 monitor_client_log_file_dir: Optional[str] = '',
                  placement: Optional[PlacementSpec] = None,
                  unmanaged: bool = False,
                  preview_only: bool = False,
@@ -1416,6 +1421,10 @@ class NvmeofServiceSpec(ServiceSpec):
         self.omap_file_lock_retry_sleep_interval = omap_file_lock_retry_sleep_interval
         #: ``omap_file_update_reloads`` number of attempt to reload OMAP when it differs from local
         self.omap_file_update_reloads = omap_file_update_reloads
+        #: ``max_hosts_per_namespace`` max number of hosts per namespace
+        self.max_hosts_per_namespace = max_hosts_per_namespace
+        #: ``max_namespaces_with_netmask`` max number of namespaces which are not auto visible
+        self.max_namespaces_with_netmask = max_namespaces_with_netmask
         #: ``allowed_consecutive_spdk_ping_failures`` # of ping failures before aborting gateway
         self.allowed_consecutive_spdk_ping_failures = allowed_consecutive_spdk_ping_failures
         #: ``spdk_ping_interval_in_seconds`` sleep interval in seconds between SPDK pings
@@ -1441,7 +1450,11 @@ class NvmeofServiceSpec(ServiceSpec):
         #: ``spdk_timeout`` SPDK connectivity timeout
         self.spdk_timeout = spdk_timeout
         #: ``spdk_log_level`` the SPDK log level
-        self.spdk_log_level = spdk_log_level or 'WARNING'
+        self.spdk_log_level = spdk_log_level
+        #: ``spdk_protocol_log_level`` the SPDK protocol log level
+        self.spdk_protocol_log_level = spdk_protocol_log_level or 'WARNING'
+        #: ``spdk_log_file_dir`` the SPDK log output file file directory
+        self.spdk_log_file_dir = spdk_log_file_dir
         #: ``rpc_socket_dir`` the SPDK RPC socket file directory
         self.rpc_socket_dir = rpc_socket_dir or '/var/tmp/'
         #: ``rpc_socket_name`` the SPDK RPC socket file name
@@ -1478,6 +1491,8 @@ class NvmeofServiceSpec(ServiceSpec):
         self.monitor_timeout = monitor_timeout
         #: ``enable_monitor_client`` whether to connect to the ceph monitor or not
         self.enable_monitor_client = enable_monitor_client
+        #: ``monitor_client_log_file_dir`` the monitor client log output file file directory
+        self.monitor_client_log_file_dir = monitor_client_log_file_dir
 
     def get_port_start(self) -> List[int]:
         return [5500, 4420, 8009]
@@ -1520,6 +1535,16 @@ class NvmeofServiceSpec(ServiceSpec):
                                                    'notice']:
                 raise SpecValidationError(
                     'Invalid SPDK log level. Valid values are: '
+                    'DEBUG, INFO, WARNING, ERROR, NOTICE')
+
+        if self.spdk_protocol_log_level:
+            if self.spdk_protocol_log_level.lower() not in ['debug',
+                                                            'info',
+                                                            'warning',
+                                                            'error',
+                                                            'notice']:
+                raise SpecValidationError(
+                    'Invalid SPDK protocol log level. Valid values are: '
                     'DEBUG, INFO, WARNING, ERROR, NOTICE')
 
         if (
@@ -1762,7 +1787,7 @@ class IngressSpec(ServiceSpec):
         if not self.keepalive_only and not self.frontend_port:
             raise SpecValidationError(
                 'Cannot add ingress: No frontend_port specified')
-        if not self.monitor_port:
+        if not self.keepalive_only and not self.monitor_port:
             raise SpecValidationError(
                 'Cannot add ingress: No monitor_port specified')
         if not self.virtual_ip and not self.virtual_ips_list:
@@ -1805,6 +1830,7 @@ class MgmtGatewaySpec(ServiceSpec):
                  ssl_protocols: Optional[List[str]] = None,
                  ssl_ciphers: Optional[List[str]] = None,
                  enable_health_check_endpoint: bool = False,
+                 virtual_ip: Optional[str] = None,
                  preview_only: bool = False,
                  unmanaged: bool = False,
                  extra_container_args: Optional[GeneralArgList] = None,
@@ -1851,6 +1877,7 @@ class MgmtGatewaySpec(ServiceSpec):
         #: List of supported secure SSL ciphers. Changing this list may reduce system security.
         self.ssl_ciphers = ssl_ciphers
         self.enable_health_check_endpoint = enable_health_check_endpoint
+        self.virtual_ip = virtual_ip
 
     def get_port_start(self) -> List[int]:
         ports = []

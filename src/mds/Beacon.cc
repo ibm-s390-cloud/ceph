@@ -17,6 +17,7 @@
 #include "common/likely.h"
 #include "common/HeartbeatMap.h"
 
+#include "include/compat.h" // for ceph_pthread_setname()
 #include "include/stringify.h"
 #include "include/util.h"
 
@@ -60,6 +61,7 @@ void Beacon::shutdown()
   std::unique_lock<std::mutex> lock(mutex);
   if (!finished) {
     finished = true;
+    cvar.notify_all();
     lock.unlock();
     if (sender.joinable())
       sender.join();
@@ -73,6 +75,7 @@ void Beacon::init(const MDSMap &mdsmap)
   _notify_mdsmap(mdsmap);
 
   sender = std::thread([this]() {
+    ceph_pthread_setname("mds-beacon");
     std::unique_lock<std::mutex> lock(mutex);
     bool sent;
     while (!finished) {
@@ -318,16 +321,15 @@ void Beacon::notify_health(MDSRank const *mds)
   // Detect MDS_HEALTH_TRIM condition
   // Indicates MDS is not trimming promptly
   {
-    const auto log_max_segments = mds->mdlog->get_max_segments();
-    const auto log_warn_factor = g_conf().get_val<double>("mds_log_warn_factor");
-    if (mds->mdlog->get_num_segments() > (size_t)(log_max_segments * log_warn_factor)) {
+    if (mds->mdlog->is_trim_slow()) {
+      auto num_segments = mds->mdlog->get_num_segments();
+      auto max_segments = mds->mdlog->get_max_segments();
       CachedStackStringStream css;
-      *css << "Behind on trimming (" << mds->mdlog->get_num_segments()
-        << "/" << log_max_segments << ")";
+      *css << "Behind on trimming (" << num_segments << "/" << max_segments << ")";
 
       MDSHealthMetric m(MDS_HEALTH_TRIM, HEALTH_WARN, css->strv());
-      m.metadata["num_segments"] = stringify(mds->mdlog->get_num_segments());
-      m.metadata["max_segments"] = stringify(log_max_segments);
+      m.metadata["num_segments"] = stringify(num_segments);
+      m.metadata["max_segments"] = stringify(max_segments);
       health.metrics.push_back(m);
     }
   }

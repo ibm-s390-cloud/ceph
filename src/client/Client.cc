@@ -3646,6 +3646,9 @@ void Client::put_cap_ref(Inode *in, int cap)
     if (last & CEPH_CAP_FILE_CACHE) {
       ldout(cct, 5) << __func__ << " dropped last FILE_CACHE ref on " << *in << dendl;
       ++put_nref;
+
+      ldout(cct, 10) << __func__ << " calling signal_caps_inode" << dendl;
+      signal_caps_inode(in);
     }
     if (drop)
       check_caps(in, 0);
@@ -3840,6 +3843,7 @@ void Client::send_cap(Inode *in, MetaSession *session, Cap *cap,
 				   want,
 				   flush,
 				   cap->mseq,
+                                   cap->issue_seq,
                                    cap_epoch_barrier);
   /*
    * Since the setattr will check the cephx mds auth access before
@@ -3853,7 +3857,6 @@ void Client::send_cap(Inode *in, MetaSession *session, Cap *cap,
   m->caller_uid = -1;
   m->caller_gid = -1;
 
-  m->head.issue_seq = cap->issue_seq;
   m->set_tid(flush_tid);
 
   m->head.uid = in->uid;
@@ -5518,10 +5521,10 @@ void Client::handle_cap_export(MetaSession *session, Inode *in, const MConstRef<
         if (it != in->caps.end()) {
 	  Cap &tcap = it->second;
 	  if (tcap.cap_id == m->peer.cap_id &&
-	      ceph_seq_cmp(tcap.seq, m->peer.seq) < 0) {
+	      ceph_seq_cmp(tcap.seq, m->peer.issue_seq) < 0) {
 	    tcap.cap_id = m->peer.cap_id;
-	    tcap.seq = m->peer.seq - 1;
-	    tcap.issue_seq = tcap.seq;
+	    tcap.seq = m->peer.issue_seq - 1;
+	    tcap.issue_seq = tcap.issue_seq;
 	    tcap.issued |= cap.issued;
 	    tcap.implemented |= cap.issued;
 	    if (&cap == in->auth_cap)
@@ -5531,7 +5534,7 @@ void Client::handle_cap_export(MetaSession *session, Inode *in, const MConstRef<
 	  }
         } else {
 	  add_update_cap(in, tsession.get(), m->peer.cap_id, cap.issued, 0,
-		         m->peer.seq - 1, m->peer.mseq, (uint64_t)-1,
+		         m->peer.issue_seq - 1, m->peer.mseq, (uint64_t)-1,
 		         &cap == in->auth_cap ? CEPH_CAP_FLAG_AUTH : 0,
 		         cap.latest_perms);
         }
@@ -6125,6 +6128,10 @@ int Client::may_open(Inode *in, int flags, const UserPerm& perms)
   int r = 0;
   switch (in->mode & S_IFMT) {
     case S_IFLNK:
+#if defined(__linux__) && defined(O_PATH)
+      if (flags & O_PATH)
+        break;
+#endif
       r = -CEPHFS_ELOOP;
       goto out;
     case S_IFDIR:
@@ -7951,6 +7958,12 @@ int Client::readlinkat(int dirfd, const char *relpath, char *buf, loff_t size, c
   int r = get_fd_inode(dirfd, &dirinode);
   if (r < 0) {
     return r;
+  }
+
+  if (!strcmp(relpath, "")) {
+    if (!dirinode.get()->is_symlink())
+      return -CEPHFS_ENOENT;
+    return _readlink(dirinode.get(), buf, size);
   }
 
   InodeRef in;
@@ -16221,7 +16234,7 @@ int Client::_fallocate(Fh *fh, int mode, int64_t offset, int64_t length)
   if (offset < 0 || length <= 0)
     return -CEPHFS_EINVAL;
 
-  if (mode & ~(FALLOC_FL_KEEP_SIZE | FALLOC_FL_PUNCH_HOLE))
+  if (mode == 0 || (mode & ~(FALLOC_FL_KEEP_SIZE | FALLOC_FL_PUNCH_HOLE)))
     return -CEPHFS_EOPNOTSUPP;
 
   if ((mode & FALLOC_FL_PUNCH_HOLE) && !(mode & FALLOC_FL_KEEP_SIZE))
