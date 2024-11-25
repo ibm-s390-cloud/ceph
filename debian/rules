@@ -54,7 +54,7 @@ extraopts += -DWITH_QATZIP=OFF
 extraopts += -DWITH_CCACHE=ON
 extraopts += -DWITH_MGR_DASHBOARD_FRONTEND=OFF
 extraopts += -DALLOCATOR=tcmalloc
-extraopts += -DCMAKE_BUILD_TYPE=Release
+extraopts += -DCMAKE_BUILD_TYPE=Debug
 extraopts += -DCMAKE_CXX_FLAGS="-fno-lto"
 extraopts += -DWITH_JAEGER=OFF
 
