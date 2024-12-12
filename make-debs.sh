@@ -17,7 +17,7 @@
 set -xe
 
 . /etc/os-release
-base=${1:-/mnt/mpoint/release}
+base=${1:-/tmp/release}
 releasedir=$base/$NAME/WORKDIR
 rm -fr $(dirname $releasedir)
 mkdir -p $releasedir
