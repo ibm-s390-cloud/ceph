@@ -261,6 +261,21 @@
                 Another name for :term:`Dashboard`.
 
 	Dashboard Plugin
+                The dashboard plugin was a Mimic-era web application that
+                visualized information and statistics about the Ceph cluster
+                using a web server hosted by the :ref:`Ceph
+                Manager<ceph-manager-daemon>`.
+
+                See `the Mimic-era Dashboard Plugin documentation
+                <https://docs.ceph.com/en/mimic/mgr/dashboard/>`_.
+
+        DC
+                **D**\ata **C**\enter.
+
+        Flapping OSD
+                An OSD that is repeatedly marked ``up`` and then ``down`` in
+                rapid succession. See :ref:`rados_tshooting_flapping_osd`.
+
         FQDN
                 **F**\ully **Q**\ualified **D**\omain **N**\ame. A domain name
                 that is applied to a node in a network and that specifies the
@@ -361,6 +376,9 @@
                 mid-2010s to insist that "OSD" should refer to "Object Storage
                 Device", so it is important to know which meaning is intended. 
 
+        OSD, flapping
+                See :term:`Flapping OSD`.
+
 	OSD FSID 
                 The OSD fsid is a unique identifier that is used to identify an
                 OSD. It is found in the OSD path in a file called ``osd_fsid``.
@@ -395,7 +413,15 @@
                 placement group, and each placement group belongs to exactly
                 one Ceph pool. 
 
+        PLP 
+                **P**\ower **L**\oss **P**\rotection. A technology that
+                protects the data of solid-state drives by using capacitors to
+                extend the amount of time available for transferring data from
+                the DRAM cache to the SSD's permanent memory. Consumer-grade
+                SSDs are rarely equipped with PLP.
+
 	:ref:`Pool<rados_pools>`
+
 		A pool is a logical partition used to store objects.
 
 	Pools

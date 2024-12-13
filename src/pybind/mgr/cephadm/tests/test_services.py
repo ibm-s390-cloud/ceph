@@ -1849,7 +1849,10 @@ class TestIngressService:
         with with_host(cephadm_module, 'test', addr='1.2.3.7'):
             cephadm_module.cache.update_host_networks('test', {
                 '1.2.3.0/24': {
-                    'if0': ['1.2.3.4']
+                    'if0': [
+                        '1.2.3.4',  # simulate already assigned VIP
+                        '1.2.3.1',  # simulate interface IP
+                    ]
                 }
             })
 
@@ -1897,7 +1900,7 @@ class TestIngressService:
                                 'auth_type PASS\n      '
                                 'auth_pass 12345\n  '
                                 '}\n  '
-                                'unicast_src_ip 1.2.3.4\n  '
+                                'unicast_src_ip 1.2.3.1\n  '
                                 'unicast_peer {\n  '
                                 '}\n  '
                                 'virtual_ipaddress {\n    '
@@ -2204,7 +2207,7 @@ class TestIngressService:
                                 'maxconn                 8000\n'
                                 '\nfrontend stats\n    '
                                 'mode http\n    '
-                                'bind [..]:8999\n    '
+                                'bind [::]:8999\n    '
                                 'bind 1.2.3.7:8999\n    '
                                 'stats enable\n    '
                                 'stats uri /stats\n    '
@@ -2213,7 +2216,7 @@ class TestIngressService:
                                 'http-request use-service prometheus-exporter if { path /metrics }\n    '
                                 'monitor-uri /health\n'
                                 '\nfrontend frontend\n    '
-                                'bind [..]:8089\n    '
+                                'bind [::]:8089\n    '
                                 'default_backend backend\n\n'
                                 'backend backend\n    '
                                 'option forwardfor\n    '

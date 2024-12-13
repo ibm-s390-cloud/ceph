@@ -1363,10 +1363,15 @@ int RGWRados::init_complete(const DoutPrefixProvider *dpp, optional_yield y)
     using namespace rgw;
     if (svc.site->is_meta_master() &&
         all_zonegroups_support(*svc.site, zone_features::notification_v2)) {
-      spawn::spawn(v1_topic_migration, [this] (spawn::yield_context yield) {
+      boost::asio::spawn(v1_topic_migration, [this] (boost::asio::yield_context yield) {
             DoutPrefix dpp{cct, dout_subsys, "v1 topic migration: "};
             rgwrados::topic_migration::migrate(&dpp, driver, v1_topic_migration, yield);
+          }, [] (std::exception_ptr eptr) {
+            if (eptr) std::rethrow_exception(eptr);
           });
+      // TODO: we run this on a separate thread so shutdown can cancel it with
+      // v1_topic_migration.stop(), but we could run it on the global thread
+      // pool and cancel spawn() with a cancellation_signal instead
       v1_topic_migration.start(1);
     }
   }
@@ -3241,7 +3246,7 @@ int RGWRados::Object::Write::_do_write_meta(uint64_t size, uint64_t accounted_si
   auto& ioctx = ref.ioctx;
 
   tracepoint(rgw_rados, operate_enter, req_id.c_str());
-  r = rgw_rados_operate(rctx.dpp, ref.ioctx, ref.obj.oid, &op, rctx.y, 0, &trace);
+  r = rgw_rados_operate(rctx.dpp, ref.ioctx, ref.obj.oid, &op, rctx.y, 0, &trace, &epoch);
   tracepoint(rgw_rados, operate_exit, req_id.c_str());
   if (r < 0) { /* we can expect to get -ECANCELED if object was replaced under,
                 or -ENOENT if was removed, or -EEXIST if it did not exist
@@ -3253,7 +3258,6 @@ int RGWRados::Object::Write::_do_write_meta(uint64_t size, uint64_t accounted_si
     goto done_cancel;
   }
 
-  epoch = ioctx.get_last_version();
   poolid = ioctx.get_id();
 
   r = target->complete_atomic_modification(rctx.dpp, rctx.y);
@@ -5842,8 +5846,13 @@ int RGWRados::Object::Delete::delete_obj(optional_yield y, const DoutPrefixProvi
 
   store->remove_rgw_head_obj(op);
 
+  if (params.check_objv != nullptr) {
+    cls_version_check(op, *params.check_objv, VER_COND_EQ);
+  }
+
   auto& ioctx = ref.ioctx;
-  r = rgw_rados_operate(dpp, ioctx, ref.obj.oid, &op, y);
+  version_t epoch = 0;
+  r = rgw_rados_operate(dpp, ioctx, ref.obj.oid, &op, y, 0, nullptr, &epoch);
 
   /* raced with another operation, object state is indeterminate */
   const bool need_invalidate = (r == -ECANCELED);
@@ -5855,7 +5864,7 @@ int RGWRados::Object::Delete::delete_obj(optional_yield y, const DoutPrefixProvi
       tombstone_entry entry{*state};
       obj_tombstone_cache->add(obj, entry);
     }
-    r = index_op.complete_del(dpp, poolid, ioctx.get_last_version(), state->mtime, params.remove_objs, y, log_op);
+    r = index_op.complete_del(dpp, poolid, epoch, state->mtime, params.remove_objs, y, log_op);
 
     int ret = target->complete_atomic_modification(dpp, y);
     if (ret < 0) {
@@ -6034,7 +6043,7 @@ int RGWRados::get_obj_state_impl(const DoutPrefixProvider *dpp, RGWObjectCtx *oc
   int r = -ENOENT;
 
   if (!assume_noent) {
-    r = RGWRados::raw_obj_stat(dpp, raw_obj, &s->size, &s->mtime, &s->epoch, &s->attrset, (s->prefetch_data ? &s->data : NULL), NULL, y);
+    r = RGWRados::raw_obj_stat(dpp, raw_obj, &s->size, &s->mtime, &s->epoch, &s->attrset, (s->prefetch_data ? &s->data : NULL), &s->objv_tracker, y);
   }
 
   if (r == -ENOENT) {
@@ -6573,7 +6582,8 @@ int RGWRados::set_attrs(const DoutPrefixProvider *dpp, RGWObjectCtx* octx, RGWBu
   struct timespec mtime_ts = real_clock::to_timespec(mtime);
   op.mtime2(&mtime_ts);
   auto& ioctx = ref.ioctx;
-  r = rgw_rados_operate(dpp, ioctx, ref.obj.oid, &op, y);
+  version_t epoch = 0;
+  r = rgw_rados_operate(dpp, ioctx, ref.obj.oid, &op, y, 0, nullptr, &epoch);
   if (state) {
     if (r >= 0) {
       ACLOwner owner;
@@ -6604,7 +6614,6 @@ int RGWRados::set_attrs(const DoutPrefixProvider *dpp, RGWObjectCtx* octx, RGWBu
                  iter != state->attrset.end()) {
         storage_class = rgw_bl_str(iter->second);
       }
-      uint64_t epoch = ioctx.get_last_version();
       int64_t poolid = ioctx.get_id();
       r = index_op.complete(dpp, poolid, epoch, state->size, state->accounted_size,
                             mtime, etag, content_type, storage_class, owner,
@@ -6757,9 +6766,20 @@ int RGWRados::Object::Read::prepare(optional_yield y, const DoutPrefixProvider *
     return -ENOENT;
   }
 
+  if (params.objv_tracker) {
+    *params.objv_tracker = astate->objv_tracker;
+  }
+
   RGWBucketInfo& bucket_info = source->get_bucket_info();
 
   if (params.part_num) {
+    map<string, bufferlist> src_attrset;
+    for (auto& iter : astate->attrset) {
+      if (boost::algorithm::starts_with(iter.first, RGW_ATTR_CRYPT_PREFIX)) {
+        ldpp_dout(dpp, 4) << "get src crypt attr: " << iter.first << dendl;
+        src_attrset[iter.first] = iter.second;
+      }
+    }
     int parts_count = 0;
     // use the manifest to redirect to the requested part number
     r = get_part_obj_state(dpp, y, store, bucket_info, &source->get_ctx(),
@@ -6781,6 +6801,13 @@ int RGWRados::Object::Read::prepare(optional_yield y, const DoutPrefixProvider *
       return -ERR_INVALID_PART;
     } else {
       params.parts_count = parts_count;
+    }
+
+    for (auto& iter : src_attrset) {
+      ldpp_dout(dpp, 4) << "copy crypt attr: " << iter.first << dendl;
+      if (astate->attrset.find(iter.first) == astate->attrset.end()) {
+        astate->attrset[iter.first] = std::move(iter.second);
+      }
     }
   }
 
@@ -8674,13 +8701,9 @@ int RGWRados::raw_obj_stat(const DoutPrefixProvider *dpp,
   if (first_chunk) {
     op.read(0, cct->_conf->rgw_max_chunk_size, first_chunk, NULL);
   }
+
   bufferlist outbl;
-  r = rgw_rados_operate(dpp, ref.ioctx, ref.obj.oid, &op, &outbl, y);
-
-  if (epoch) {
-    *epoch = ref.ioctx.get_last_version();
-  }
-
+  r = rgw_rados_operate(dpp, ref.ioctx, ref.obj.oid, &op, &outbl, y, 0, nullptr, epoch);
   if (r < 0)
     return r;
 
@@ -9525,6 +9548,12 @@ int RGWRados::cls_bucket_list_ordered(const DoutPrefixProvider *dpp,
     num_entries << " total entries" << dendl;
 
   auto& ioctx = index_pool;
+
+  // XXX: check_disk_state() relies on ioctx.get_last_version() but that
+  // returns 0 because CLSRGWIssueBucketList doesn't make any synchonous calls
+  rgw_bucket_entry_ver index_ver;
+  index_ver.pool = ioctx.get_id();
+
   std::map<int, rgw_cls_list_ret> shard_list_results;
   cls_rgw_obj_key start_after_key(start_after.name, start_after.instance);
   r = CLSRGWIssueBucketList(ioctx, start_after_key, prefix, delimiter,
@@ -9648,12 +9677,10 @@ int RGWRados::cls_bucket_list_ordered(const DoutPrefixProvider *dpp,
       /* there are uncommitted ops. We need to check the current
        * state, and if the tags are old we need to do clean-up as
        * well. */
-      librados::IoCtx sub_ctx;
-      sub_ctx.dup(ioctx);
       ldout_bitx(bitx, dpp, 20) << "INFO: " << __func__ <<
 	" calling check_disk_state bucket=" << bucket_info.bucket <<
 	" entry=" << dirent.key << dendl_bitx;
-      r = check_disk_state(dpp, sub_ctx, bucket_info, dirent, dirent,
+      r = check_disk_state(dpp, bucket_info, index_ver, dirent, dirent,
 			   updates[tracker.oid_name], y);
       if (r < 0 && r != -ENOENT) {
 	ldpp_dout(dpp, 0) << __func__ <<
@@ -9873,6 +9900,9 @@ int RGWRados::cls_bucket_list_unordered(const DoutPrefixProvider *dpp,
     }
   }
 
+  rgw_bucket_entry_ver index_ver;
+  index_ver.pool = ioctx.get_id();
+
   uint32_t count = 0u;
   std::map<std::string, bufferlist> updates;
   rgw_obj_index_key last_added_entry;
@@ -9887,7 +9917,7 @@ int RGWRados::cls_bucket_list_unordered(const DoutPrefixProvider *dpp,
     cls_rgw_bucket_list_op(op, marker, prefix, empty_delimiter,
 			   num_entries,
                            list_versions, &result);
-    r = rgw_rados_operate(dpp, ioctx, oid, &op, nullptr, y);
+    r = rgw_rados_operate(dpp, ioctx, oid, &op, nullptr, y, 0, nullptr, &index_ver.epoch);
     if (r < 0) {
       ldpp_dout(dpp, 0) << "ERROR: " << __func__ <<
 	": error in rgw_rados_operate (bucket list op), r=" << r << dendl;
@@ -9904,12 +9934,10 @@ int RGWRados::cls_bucket_list_unordered(const DoutPrefixProvider *dpp,
 	  force_check) {
 	/* there are uncommitted ops. We need to check the current state,
 	 * and if the tags are old we need to do cleanup as well. */
-	librados::IoCtx sub_ctx;
-	sub_ctx.dup(ioctx);
 	ldout_bitx(bitx, dpp, 20) << "INFO: " << __func__ <<
 	  ": calling check_disk_state bucket=" << bucket_info.bucket <<
 	  " entry=" << dirent.key << dendl_bitx;
-	r = check_disk_state(dpp, sub_ctx, bucket_info, dirent, dirent, updates[oid], y);
+	r = check_disk_state(dpp, bucket_info, index_ver, dirent, dirent, updates[oid], y);
 	if (r < 0 && r != -ENOENT) {
 	  ldpp_dout(dpp, 0) << "ERROR: " << __func__ <<
 	    ": error in check_disk_state, r=" << r << dendl;
@@ -10139,8 +10167,8 @@ int RGWRados::remove_objs_from_index(const DoutPrefixProvider *dpp,
 }
 
 int RGWRados::check_disk_state(const DoutPrefixProvider *dpp,
-                               librados::IoCtx io_ctx,
                                RGWBucketInfo& bucket_info,
+                               const rgw_bucket_entry_ver& index_ver,
                                rgw_bucket_dir_entry& list_state,
                                rgw_bucket_dir_entry& object,
                                bufferlist& suggested_updates,
@@ -10168,8 +10196,6 @@ int RGWRados::check_disk_state(const DoutPrefixProvider *dpp,
     ldpp_dout(dpp, 0) << "WARNING: generated locator (" << loc << ") is different from listed locator (" << list_state.locator << ")" << dendl;
   }
 
-  io_ctx.locator_set_key(list_state.locator);
-
   RGWObjState *astate = NULL;
   RGWObjManifest *manifest = nullptr;
   RGWObjectCtx octx(this->driver);
@@ -10190,8 +10216,7 @@ int RGWRados::check_disk_state(const DoutPrefixProvider *dpp,
     }
 
     // encode a suggested removal of that key
-    list_state.ver.epoch = io_ctx.get_last_version();
-    list_state.ver.pool = io_ctx.get_id();
+    list_state.ver = index_ver;
     ldout_bitx(bitx, dpp, 10) << "INFO: " << __func__ << ": encoding remove of " << list_state.key << " on suggested_updates" << dendl_bitx;
     cls_rgw_encode_suggestion(CEPH_RGW_REMOVE | suggest_flag, list_state, suggested_updates);
     return -ENOENT;
