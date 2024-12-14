@@ -66,7 +66,7 @@ py3_overrides_packages := $(basename $(notdir $(wildcard debian/*.requires)))
 py3_packages := cephfs-shell cephfs-top cephadm
 
 %:
-	dh $@ --buildsystem=cmake --with javahelper,python3 --parallel
+	dh $@ --buildsystem=cmake --with javahelper,python3,systemd --parallel
 
 override_dh_auto_configure:
 	env | sort
