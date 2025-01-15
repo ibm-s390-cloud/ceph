@@ -6738,9 +6738,8 @@ void BlueStore::_main_bdev_label_try_reserve()
   vector<uint64_t> candidate_positions;
   vector<uint64_t> accepted_positions;
   uint64_t lsize = std::max(BDEV_LABEL_BLOCK_SIZE, min_alloc_size);
-  for (size_t i = 1; i < bdev_label_positions.size(); i++) {
-    uint64_t location = bdev_label_positions[i];
-    if (location + lsize <= bdev->get_size()) {
+  for (uint64_t location : bdev_label_valid_locations) {
+    if (location != BDEV_FIRST_LABEL_POSITION) {
       candidate_positions.push_back(location);
     }
   }
@@ -7668,6 +7667,10 @@ int BlueStore::_open_db_and_around(bool read_only, bool to_repair)
   if (r < 0)
     goto out_fm;
 
+  if (bdev_label_multi) {
+    _main_bdev_label_try_reserve();
+  }
+
   // Re-open in the proper mode(s).
 
   // Can't simply bypass second open for read-only mode as we need to
@@ -7682,10 +7685,6 @@ int BlueStore::_open_db_and_around(bool read_only, bool to_repair)
 
   if (!read_only) {
     _post_init_alloc(zone_adjustments);
-  }
-
-  if (bdev_label_multi) {
-    _main_bdev_label_try_reserve();
   }
 
   // when function is called in repair mode (to_repair=true) we skip db->open()/create()
@@ -8039,9 +8038,26 @@ void BlueStore::_close_db()
   db = nullptr;
 
   if (do_destage && fm && fm->is_null_manager()) {
+    if (cct->_conf->osd_fast_shutdown) {
+      interval_set<uint64_t> discard_queued;
+      bdev->swap_discard_queued(discard_queued);
+      dout(10) << __func__ << "::discard_drain: size=" << discard_queued.size()
+	       << " num_intervals=" << discard_queued.num_intervals() << dendl;
+      // copy discard_queued to the allocator before storing it
+      for (auto p = discard_queued.begin(); p != discard_queued.end(); ++p) {
+	dout(20) << __func__ << "::discarded-extent=[" << p.get_start()
+		 << ", " << p.get_len() << "]" << dendl;
+	alloc->init_add_free(p.get_start(), p.get_len());
+      }
+    }
+
+    // When we reach here it is either a graceful shutdown (so can drain the full discards-queue)
+    //   or it was a fast shutdown, but we already moved the main discards-queue to the allocator
+    //   and only need to wait for the threads local discard_processing queues to drain
+    bdev->discard_drain();
     int ret = store_allocator(alloc);
-    if (ret != 0) {
-      derr << __func__ << "::NCB::store_allocator() failed (continue with bitmapFreelistManager)" << dendl;
+    if (unlikely(ret != 0)) {
+      derr << __func__ << "::NCB::store_allocator() failed (we will need to rebuild it on startup)" << dendl;
     }
   }
 
@@ -11226,9 +11242,7 @@ int BlueStore::_fsck_on_open(BlueStore::FSCKDepth depth, bool repair)
     string p = path + "/block";
     _write_bdev_label(cct, bdev, p, bdev_label, bdev_labels_in_repair);
     for (uint64_t pos : bdev_labels_in_repair) {
-      if (pos != BDEV_FIRST_LABEL_POSITION) {
-        bdev_label_valid_locations.push_back(pos);
-      }
+      bdev_label_valid_locations.push_back(pos);
     }
     repaired += bdev_labels_in_repair.size();
   }
@@ -11525,6 +11539,22 @@ void BlueStore::inject_bluefs_file(std::string_view dir, std::string_view name, 
 
   bluefs->fsync(p_handle);
   bluefs->close_writer(p_handle);
+}
+
+int BlueStore::compact()
+{
+  int r = 0;
+  ceph_assert(db);
+  if (cct->_conf.get_val<bool>("bluestore_async_db_compaction")) {
+    dout(1) << __func__ << " starting async.." << dendl;
+    db->compact_async();
+    r = -EINPROGRESS;
+  } else {
+    dout(1) << __func__ << " starting sync.." << dendl;
+    db->compact();
+    dout(1) << __func__ << " finished." << dendl;
+  }
+  return r;
 }
 
 void BlueStore::collect_metadata(map<string,string> *pm)
@@ -20189,6 +20219,14 @@ int BlueStore::read_allocation_from_drive_for_bluestore_tool()
     ret = add_existing_bluefs_allocation(allocator.get(), stats);
     if (ret < 0) {
       return ret;
+    }
+    if (bdev_label_multi) {
+      uint64_t lsize = std::max(BDEV_LABEL_BLOCK_SIZE, min_alloc_size);
+      for (uint64_t p : bdev_label_valid_locations) {
+	if (p != BDEV_FIRST_LABEL_POSITION) {
+	  allocator->init_rm_free(p, lsize);
+	}
+      }
     }
 
     duration = ceph_clock_now() - start;
