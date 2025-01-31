@@ -66,11 +66,6 @@ void NVMeofGwMon::on_shutdown()
 
 void NVMeofGwMon::tick()
 {
-  if (++tick_ratio == 10) {
-    global_rebalance_index++;
-    dout(20) <<  "rebalance index " << global_rebalance_index << dendl;
-    tick_ratio = 0;
-  }
   if (!is_active() || !mon.is_leader()) {
     dout(10) << "NVMeofGwMon leader : " << mon.is_leader()
 	     << "active : " << is_active()  << dendl;
@@ -93,7 +88,7 @@ void NVMeofGwMon::tick()
     // This case handles either local slowness (calls being delayed
     // for whatever reason) or cluster election slowness (a long gap
     // between calls while an election happened)
-    dout(10) << ": resetting beacon timeouts due to mon delay "
+    dout(4) << ": resetting beacon timeouts due to mon delay "
       "(slow election?) of " << now - last_tick << " seconds" << dendl;
     for (auto &i : last_beacon) {
       i.second = now;
@@ -115,7 +110,7 @@ void NVMeofGwMon::tick()
     auto& lb = itr.first;
     auto last_beacon_time = itr.second;
     if (last_beacon_time < cutoff) {
-      dout(10) << "beacon timeout for GW " << lb.gw_id << dendl;
+      dout(1) << "beacon timeout for GW " << lb.gw_id << dendl;
       pending_map.process_gw_map_gw_down(lb.gw_id, lb.group_key, propose);
       _propose_pending |= propose;
       last_beacon.erase(lb);
@@ -329,8 +324,9 @@ bool NVMeofGwMon::preprocess_command(MonOpRequestRef op)
     if (HAVE_FEATURE(mon.get_quorum_con_features(), NVMEOFHA)) {
       f->dump_string("features", "LB");
       if (map.created_gws[group_key].size()) {
-        uint32_t index = (global_rebalance_index %
-              map.created_gws[group_key].size()) + 1;
+        time_t seconds_since_1970 = time(NULL);
+        uint32_t index = ((seconds_since_1970/60) %
+             map.created_gws[group_key].size()) + 1;
         f->dump_unsigned("rebalance_ana_group", index);
       }
     }
@@ -548,13 +544,13 @@ bool NVMeofGwMon::prepare_beacon(MonOpRequestRef op)
 	       << map.created_gws << dendl;
       goto set_propose;
     } else {
-      dout(10) << "GW  prepares the full startup " << gw_id
+      dout(4) << "GW  prepares the full startup " << gw_id
 	       << " GW availability: "
 	       << pending_map.created_gws[group_key][gw_id].availability
 	       << dendl;
       if (pending_map.created_gws[group_key][gw_id].availability ==
 	  gw_availability_t::GW_AVAILABLE) {
-	dout(4) << " Warning :GW marked as Available in the NVmeofGwMon "
+	dout(1) << " Warning :GW marked as Available in the NVmeofGwMon "
 		<< "database, performed full startup - Apply GW!"
 		<< gw_id << dendl;
 	 pending_map.handle_gw_performing_fast_reboot(gw_id, group_key, propose);
@@ -582,7 +578,7 @@ bool NVMeofGwMon::prepare_beacon(MonOpRequestRef op)
 	ack_map.created_gws[group_key][gw_id] =
 	  pending_map.created_gws[group_key][gw_id];
 	ack_map.epoch = map.epoch;
-	dout(4) << " Force gw to exit: Sending ack_map to GW: "
+	dout(1) << " Force gw to exit: Sending ack_map to GW: "
 		<< gw_id << dendl;
 	auto msg = make_message<MNVMeofGwMap>(ack_map);
 	mon.send_reply(op, msg.detach());
@@ -625,15 +621,15 @@ bool NVMeofGwMon::prepare_beacon(MonOpRequestRef op)
     avail = gw_availability_t::GW_CREATED;
     dout(20) << "No-subsystems condition detected for GW " << gw_id <<dendl;
   } else {
-    bool listener_found = true;
+    bool listener_found = false;
     for (auto &subs: sub) {
-      if (subs.listeners.size() == 0) {
-        listener_found = false;
-        dout(10) << "No-listeners condition detected for GW " << gw_id << " for nqn " << subs.nqn << dendl;
+      if (subs.listeners.size()) {
+        listener_found = true;
         break;
       }
     }
     if (!listener_found) {
+     dout(10) << "No-listeners condition detected for GW " << gw_id << dendl;
      avail = gw_availability_t::GW_CREATED;
     }
   }// for HA no-subsystems and no-listeners are same usecases

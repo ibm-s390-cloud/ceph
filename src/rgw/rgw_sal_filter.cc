@@ -435,6 +435,11 @@ std::unique_ptr<Lifecycle> FilterDriver::get_lifecycle(void)
   return std::make_unique<FilterLifecycle>(std::move(lc));
 }
 
+bool FilterDriver::process_expired_objects(const DoutPrefixProvider *dpp,
+	       			           optional_yield y) {
+  return next->process_expired_objects(dpp, y);
+}
+
 std::unique_ptr<Notification> FilterDriver::get_notification(rgw::sal::Object* obj,
 				rgw::sal::Object* src_obj, req_state* s,
 				rgw::notify::EventType event_type, optional_yield y,
@@ -1044,6 +1049,17 @@ int FilterObject::copy_object(const ACLOwner& owner,
 RGWAccessControlPolicy& FilterObject::get_acl()
 {
   return next->get_acl();
+}
+
+int FilterObject::list_parts(const DoutPrefixProvider* dpp, CephContext* cct,
+			     int max_parts, int marker, int* next_marker,
+			     bool* truncated, list_parts_each_t each_func,
+			     optional_yield y)
+{
+  return next->list_parts(dpp, cct, max_parts, marker, next_marker,
+			  truncated,
+			  sal::Object::list_parts_each_t(each_func),
+			  y);
 }
 
 int FilterObject::load_obj_state(const DoutPrefixProvider *dpp,

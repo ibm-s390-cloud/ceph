@@ -2010,6 +2010,11 @@ void POSIXDriver::register_admin_apis(RGWRESTMgr* mgr)
   return next->register_admin_apis(mgr);
 }
 
+bool POSIXDriver::process_expired_objects(const DoutPrefixProvider *dpp,
+	       				                          optional_yield y) {
+  return next->process_expired_objects(dpp, y);
+}
+
 std::unique_ptr<Notification> POSIXDriver::get_notification(rgw::sal::Object* obj,
 			      rgw::sal::Object* src_obj, struct req_state* s,
 			      rgw::notify::EventType event_type, optional_yield y,
@@ -2891,6 +2896,14 @@ int POSIXObject::copy_object(const ACLOwner& owner,
     attrs[RGW_POSIX_ATTR_OBJECT_TYPE] = pot;
   }
   return dobj->set_obj_attrs(dpp, &attrs, nullptr, y, rgw::sal::FLAG_LOG_OP);
+}
+
+int POSIXObject::list_parts(const DoutPrefixProvider* dpp, CephContext* cct,
+			    int max_parts, int marker, int* next_marker,
+			    bool* truncated, list_parts_each_t each_func,
+			    optional_yield y)
+{
+  return -EOPNOTSUPP;
 }
 
 int POSIXObject::load_obj_state(const DoutPrefixProvider* dpp, optional_yield y, bool follow_olh)

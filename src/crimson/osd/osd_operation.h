@@ -50,24 +50,36 @@ struct PGPeeringPipeline {
 };
 
 struct CommonPGPipeline {
-  struct WaitForActive : OrderedExclusivePhaseT<WaitForActive> {
-    static constexpr auto type_name = "CommonPGPipeline:::wait_for_active";
-  } wait_for_active;
-  struct RecoverMissing : OrderedConcurrentPhaseT<RecoverMissing> {
-    static constexpr auto type_name = "CommonPGPipeline::recover_missing";
-  } recover_missing;
-  struct CheckAlreadyCompleteGetObc : OrderedExclusivePhaseT<CheckAlreadyCompleteGetObc> {
-    static constexpr auto type_name = "CommonPGPipeline::check_already_complete_get_obc";
-  } check_already_complete_get_obc;
-  struct LockOBC : OrderedConcurrentPhaseT<LockOBC> {
-    static constexpr auto type_name = "CommonPGPipeline::lock_obc";
-  } lock_obc;
+  struct WaitPGReady : OrderedConcurrentPhaseT<WaitPGReady> {
+    static constexpr auto type_name = "CommonPGPipeline:::wait_pg_ready";
+  } wait_pg_ready;
+  struct GetOBC : OrderedExclusivePhaseT<GetOBC> {
+    static constexpr auto type_name = "CommonPGPipeline:::get_obc";
+  } get_obc;
+};
+
+struct PGRepopPipeline {
   struct Process : OrderedExclusivePhaseT<Process> {
-    static constexpr auto type_name = "CommonPGPipeline::process";
+    static constexpr auto type_name = "PGRepopPipeline::process";
+  } process;
+  struct WaitCommit : OrderedConcurrentPhaseT<WaitCommit> {
+    static constexpr auto type_name = "PGRepopPipeline::wait_repop";
+  } wait_commit;
+  struct SendReply : OrderedExclusivePhaseT<SendReply> {
+    static constexpr auto type_name = "PGRepopPipeline::send_reply";
+  } send_reply;
+};
+
+struct CommonOBCPipeline {
+  struct Process : OrderedExclusivePhaseT<Process> {
+    static constexpr auto type_name = "CommonOBCPipeline::process";
   } process;
   struct WaitRepop : OrderedConcurrentPhaseT<WaitRepop> {
-    static constexpr auto type_name = "ClientRequest::PGPipeline::wait_repop";
+    static constexpr auto type_name = "CommonOBCPipeline::wait_repop";
   } wait_repop;
+  struct SendReply : OrderedExclusivePhaseT<SendReply> {
+    static constexpr auto type_name = "CommonOBCPipeline::send_reply";
+  } send_reply;
 };
 
 
@@ -205,6 +217,9 @@ protected:
 
 public:
   static constexpr bool is_trackable = true;
+  virtual bool requires_pg() const {
+    return true;
+  }
 };
 
 template <class T>
@@ -265,6 +280,7 @@ struct OSDOperationRegistry : OperationRegistryT<
 
   size_t dump_historic_client_requests(ceph::Formatter* f) const;
   size_t dump_slowest_historic_client_requests(ceph::Formatter* f) const;
+  void visit_ops_in_flight(std::function<void(const ClientRequest&)>&& visit);
 
 private:
   size_t num_recent_ops = 0;
@@ -324,6 +340,18 @@ public:
     Args&&... args) {
     return trigger.maybe_record_blocking(
       with_throttle_while(std::forward<Args>(args)...), *this);
+  }
+
+  // Returns std::nullopt if the throttle is acquired immediately,
+  // returns the future for the acquiring otherwise
+  std::optional<seastar::future<>>
+  try_acquire_throttle_now(crimson::osd::scheduler::params_t params) {
+    if (!max_in_progress || in_progress < max_in_progress) {
+      ++in_progress;
+      --pending;
+      return std::nullopt;
+    }
+    return acquire_throttle(params);
   }
 
 private:

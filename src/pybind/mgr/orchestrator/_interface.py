@@ -747,6 +747,10 @@ class Orchestrator(object):
         """
         raise NotImplementedError()
 
+    def set_osd_spec(self, service_name: str, osd_ids: List[str]) -> OrchResult:
+        """ set service of osd """
+        raise NotImplementedError()
+
     def blink_device_light(self, ident_fault: str, on: bool, locations: List['DeviceLightLoc']) -> OrchResult[List[str]]:
         """
         Instructs the orchestrator to enable or disable either the ident or the fault LED.
@@ -901,9 +905,17 @@ class Orchestrator(object):
         """Change/Add a specific setting for a tuned profile"""
         raise NotImplementedError()
 
+    def tuned_profile_add_settings(self, profile_name: str, setting: dict) -> OrchResult[str]:
+        """Change/Add multiple settings for a tuned profile"""
+        raise NotImplementedError()
+
     def tuned_profile_rm_setting(self, profile_name: str, setting: str) -> OrchResult[str]:
         """Remove a specific setting for a tuned profile"""
         raise NotImplementedError()
+
+    def tuned_profile_rm_settings(self, profile_name: str, settings: List[str]) -> OrchResult[str]:
+        """Remove multiple settings from a tuned profile"""
+        raise NotImplementedError
 
     def upgrade_check(self, image: Optional[str], version: Optional[str]) -> OrchResult[str]:
         raise NotImplementedError()
@@ -931,6 +943,9 @@ class Orchestrator(object):
 
         :return: UpgradeStatusSpec instance
         """
+        raise NotImplementedError()
+
+    def update_service(self, service_type: str, service_image: str, image: str) -> OrchResult:
         raise NotImplementedError()
 
     @_hide_in_features

@@ -324,6 +324,9 @@ export class TaskMessageService {
         metadata.bucket_names.length > 1 ? 'selected buckets' : metadata.bucket_names[0]
       }`;
     }),
+    'rgw/accounts': this.newTaskMessage(this.commonOperations.delete, (metadata) => {
+      return $localize`${`account '${metadata.account_names[0]}'`}`;
+    }),
     'rgw/multisite/sync-policy/delete': this.newTaskMessage(
       this.commonOperations.delete,
       (metadata) => {
@@ -395,6 +398,10 @@ export class TaskMessageService {
     'nfs/edit': this.newTaskMessage(this.commonOperations.update, (metadata) => this.nfs(metadata)),
     'nfs/delete': this.newTaskMessage(this.commonOperations.delete, (metadata) =>
       this.nfs(metadata)
+    ),
+    // smb
+    'smb/cluster/remove': this.newTaskMessage(this.commonOperations.remove, (metadata) =>
+      this.smbCluster(metadata)
     ),
     // Grafana tasks
     'grafana/dashboards/update': this.newTaskMessage(
@@ -479,6 +486,10 @@ export class TaskMessageService {
     'cephfs/snapshot/schedule/deactivate': this.newTaskMessage(
       this.commonOperations.deactivate,
       (metadata) => this.snapshotSchedule(metadata)
+    ),
+    // smb
+    'smb/cluster/create': this.newTaskMessage(this.commonOperations.create, (metadata) =>
+      this.smbCluster(metadata)
     )
   };
 
@@ -537,6 +548,10 @@ export class TaskMessageService {
     return $localize`NFS '${metadata.cluster_id}\:${
       metadata.export_id ? metadata.export_id : metadata.path
     }'`;
+  }
+
+  smbCluster(metadata: any) {
+    return $localize`SMB Cluster  '${metadata.cluster_id}'`;
   }
 
   service(metadata: any) {

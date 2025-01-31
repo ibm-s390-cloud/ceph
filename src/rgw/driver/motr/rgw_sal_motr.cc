@@ -1111,11 +1111,6 @@ bool MotrZone::get_redirect_endpoint(std::string* endpoint)
   return false;
 }
 
-bool MotrZone::has_zonegroup_api(const std::string& api) const
-{
-  return (zonegroup.group.api_name == api);
-}
-
 const std::string& MotrZone::get_current_period_id()
 {
   return current_period->get_id();
@@ -3329,6 +3324,12 @@ int MotrStore::cluster_stat(RGWClusterStat& stats)
 }
 
 std::unique_ptr<Lifecycle> MotrStore::get_lifecycle(void)
+{
+  return 0;
+}
+
+bool MotrStore::process_expired_objects(const DoutPrefixProvider *dpp,
+	       				optional_yield y)
 {
   return 0;
 }

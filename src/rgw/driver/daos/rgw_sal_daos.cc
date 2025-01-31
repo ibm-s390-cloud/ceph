@@ -858,8 +858,6 @@ bool DaosZone::is_writeable() { return true; }
 
 bool DaosZone::get_redirect_endpoint(std::string* endpoint) { return false; }
 
-bool DaosZone::has_zonegroup_api(const std::string& api) const { return false; }
-
 const std::string& DaosZone::get_current_period_id() {
   return current_period->get_id();
 }
@@ -2320,6 +2318,12 @@ int DaosStore::cluster_stat(RGWClusterStat& stats) {
 }
 
 std::unique_ptr<Lifecycle> DaosStore::get_lifecycle(void) {
+  DAOS_NOT_IMPLEMENTED_LOG(nullptr);
+  return 0;
+}
+
+bool DaosStore::process_expired_objects(const DoutPrefixProvider *dpp,
+	       				optional_yield y) {
   DAOS_NOT_IMPLEMENTED_LOG(nullptr);
   return 0;
 }

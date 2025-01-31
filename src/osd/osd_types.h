@@ -1151,9 +1151,8 @@ public:
   bool is_set(key_t key) const;
 
   template<typename T>
-  void set(key_t key, const T &val) {
-    value_t value = val;
-    opts[key] = value;
+  void set(key_t key, T &&val) {
+    opts.insert_or_assign(key, std::forward<T>(val));
   }
 
   template<typename T>
@@ -2223,6 +2222,13 @@ struct pg_scrubbing_status_t {
   bool m_is_active{false};
   scrub_level_t m_is_deep{scrub_level_t::shallow};
   bool m_is_periodic{true};
+  // the following are only relevant when we are reserving replicas:
+  uint16_t m_osd_to_respond{0};
+  /// this is the n'th replica we are reserving (out of m_num_to_reserve)
+  uint8_t m_ordinal_of_requested_replica{0};
+  /// the number of replicas we are reserving for scrubbing. 0 means we are not
+  /// in the process of reserving replicas.
+  uint8_t m_num_to_reserve{0};
 };
 
 bool operator==(const pg_scrubbing_status_t& l, const pg_scrubbing_status_t& r);

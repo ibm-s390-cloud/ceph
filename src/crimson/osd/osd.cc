@@ -105,6 +105,7 @@ OSD::OSD(int id, uint32_t nonce,
       std::ignore = update_heartbeat_peers(
       ).then([this] {
 	update_stats();
+        mgrc->update_daemon_health(get_health_metrics());
 	tick_timer.arm(
 	  std::chrono::seconds(TICK_INTERVAL));
       });
@@ -504,6 +505,8 @@ seastar::future<> OSD::start()
   }).then_unpack([this] {
     return _add_me_to_crush();
   }).then([this] {
+    return _add_device_class();
+   }).then([this] {
     monc->sub_want("osd_pg_creates", last_pg_create_epoch, 0);
     monc->sub_want("mgrmap", 0, 0);
     monc->sub_want("osdmap", 0, 0);
@@ -606,6 +609,38 @@ seastar::future<> OSD::_send_boot()
   // OSDMap flag
   m->metadata["osd_type"] = "crimson";
   return monc->send_message(std::move(m));
+}
+
+seastar::future<> OSD::_add_device_class()
+{
+  LOG_PREFIX(OSD::_add_device_class);
+  if (!local_conf().get_val<bool>("osd_class_update_on_start")) {
+    co_return;
+  }
+
+  std::string device_class = co_await store.get_default_device_class();
+  if (device_class.empty()) {
+    WARN("Device class is empty; skipping crush update.");
+    co_return;
+  }
+
+  INFO("device_class is {} ", device_class);
+
+  std::string cmd = fmt::format(
+    R"({{"prefix": "osd crush set-device-class", "class": "{}", "ids": ["{}"]}})",
+    device_class, stringify(whoami)
+  );
+
+  auto [code, message, out] = co_await monc->run_command(std::move(cmd), {});
+  if (code) {
+    // to be caught by crimson/osd/main.cc
+    WARN("fail to set device_class : {} ({})", message, code);
+    throw std::runtime_error("fail to set device_class");
+  } else {
+    INFO("device_class was set: {}", message);
+  }
+
+  co_return;
 }
 
 seastar::future<> OSD::_add_me_to_crush()
@@ -942,7 +977,7 @@ void OSD::handle_conf_change(
   const crimson::common::ConfigProxy& conf,
   const std::set <std::string> &changed)
 {
-  if (changed.count("osd_beacon_report_interval")) {
+  if (changed.contains("osd_beacon_report_interval")) {
     beacon_timer.rearm_periodic(
       std::chrono::seconds(conf->osd_beacon_report_interval));
   }
@@ -1379,6 +1414,74 @@ seastar::future<> OSD::handle_recovery_subreq(
 {
   return pg_shard_manager.start_pg_operation<RecoverySubRequest>(
     conn, std::move(m)).second;
+}
+
+vector<DaemonHealthMetric> OSD::get_health_metrics()
+{
+  LOG_PREFIX(OSD::get_health_metrics);
+  vector<DaemonHealthMetric> metrics;
+
+  const utime_t now = ceph_clock_now();
+  utime_t oldest_secs = now;
+  utime_t too_old = now;
+  too_old -= local_conf()->osd_op_complaint_time;
+  int slow = 0;
+  ClientRequest::ICRef oldest_op;
+  map<uint64_t, int> slow_op_pools;
+  bool log_aggregated_slow_op = local_conf()->osd_aggregated_slow_ops_logging;
+  auto count_slow_ops = [&](const ClientRequest& op) {
+    if (op.get_started() < too_old) {
+      std::stringstream ss;
+      ss << "slow request ";
+      op.print(ss);
+      ss << " initiated "
+         << op.get_started();
+      WARN("{}", ss.str());
+      if (log_aggregated_slow_op) {
+        uint64_t pool_id = op.get_pgid().pgid.m_pool;
+        if (pool_id > 0 && pool_id <= (uint64_t) osdmap->get_pool_max()) {
+          slow_op_pools[pool_id]++;
+        }
+      } else {
+        clog->warn() << ss.str();
+      }
+      ++slow;
+      if (!oldest_op || op.get_started() < oldest_op->get_started()) {
+        oldest_op = &op;
+      }
+    }
+  };
+
+  auto& op_registry = get_shard_services().get_registry();
+  op_registry.visit_ops_in_flight(count_slow_ops);
+  if (slow) {
+    std::stringstream ss;
+    ss << __func__ << " reporting " << slow << " slow ops, oldest is ";
+    ceph_assert(oldest_op);
+    oldest_op->print(ss);
+    ERROR("{}", ss.str());
+    if (log_aggregated_slow_op && !slow_op_pools.empty()) {
+      std::stringstream ss;
+      auto slow_pool_it = std::max_element(slow_op_pools.begin(), slow_op_pools.end(),
+                             [](std::pair<uint64_t, int> p1, std::pair<uint64_t, int> p2) {
+                               return p1.second < p2.second;
+                             });
+      if (osdmap->get_pools().find(slow_pool_it->first) != osdmap->get_pools().end()) {
+        string pool_name = osdmap->get_pool_name(slow_pool_it->first);
+        ss << "slow requests (most affected pool [ '"
+           << pool_name
+           << "' : "
+           << slow_pool_it->second
+           << " ])";
+      }
+      WARN("{}", ss.str());
+      clog->warn() << ss.str();
+    }
+    oldest_secs = now - oldest_op->get_started();
+    metrics.emplace_back(daemon_metric::SLOW_OPS, slow, oldest_secs);
+  }
+
+  return metrics;
 }
 
 bool OSD::should_restart() const

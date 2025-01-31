@@ -2286,6 +2286,16 @@ void PrimaryLogPG::do_op(OpRequestRef& op)
     }
   }
 
+  if (cct->_conf->bluestore_debug_inject_read_err &&
+      op->may_write() &&
+      pool.info.is_erasure() &&
+      ec_inject_test_write_error0(m->get_hobj(), m->get_reqid())) {
+    // Fail retried write with error
+    dout(0) << __func__ << " Error inject - Fail retried write with EINVAL" << dendl;
+    osd->reply_op_error(op, -EINVAL);
+    return;
+  }
+
   ObjectContextRef obc;
   bool can_create = op->may_write();
   hobject_t missing_oid;
@@ -5798,10 +5808,19 @@ int PrimaryLogPG::do_extent_cmp(OpContext *ctx, OSDOp& osd_op)
 
 int PrimaryLogPG::finish_extent_cmp(OSDOp& osd_op, const bufferlist &read_bl)
 {
-  for (uint64_t idx = 0; idx < osd_op.indata.length(); ++idx) {
-    char read_byte = (idx < read_bl.length() ? read_bl[idx] : 0);
-    if (osd_op.indata[idx] != read_byte) {
-        return (-MAX_ERRNO - idx);
+  auto input_iter = osd_op.indata.begin();
+  auto read_iter = read_bl.begin();
+  uint64_t idx = 0;
+
+  while (input_iter != osd_op.indata.end()) {
+    char read_byte = (read_iter != read_bl.end() ? *read_iter : 0);
+    if (*input_iter != read_byte) {
+      return (-MAX_ERRNO - idx);
+    }
+    ++idx;
+    ++input_iter;
+    if (read_iter != read_bl.end()) {
+      ++read_iter;
     }
   }
 
@@ -6006,7 +6025,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
   object_info_t& oi = obs.oi;
   const hobject_t& soid = oi.soid;
   const bool skip_data_digest = osd->store->has_builtin_csum() &&
-    osd->osd_skip_data_digest;
+    *osd->osd_skip_data_digest;
 
   PGTransaction* t = ctx->op_t.get();
 
@@ -6069,9 +6088,9 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
     // munge ZERO -> TRUNCATE?  (don't munge to DELETE or we risk hosing attributes)
     if (op.op == CEPH_OSD_OP_ZERO &&
         obs.exists &&
-        op.extent.offset < static_cast<Option::size_t>(osd->osd_max_object_size) &&
+        op.extent.offset < *osd->osd_max_object_size &&
         op.extent.length >= 1 &&
-        op.extent.length <= static_cast<Option::size_t>(osd->osd_max_object_size) &&
+        op.extent.length <= *osd->osd_max_object_size &&
 	op.extent.offset + op.extent.length >= oi.size) {
       if (op.extent.offset >= oi.size) {
         // no-op
@@ -6781,7 +6800,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	}
 	result = check_offset_and_length(
 	  op.extent.offset, op.extent.length,
-	  static_cast<Option::size_t>(osd->osd_max_object_size), get_dpp());
+	  *osd->osd_max_object_size, get_dpp());
 	if (result < 0)
 	  break;
 
@@ -6838,7 +6857,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	}
 	result = check_offset_and_length(
 	  0, op.extent.length,
-          static_cast<Option::size_t>(osd->osd_max_object_size), get_dpp());
+          *osd->osd_max_object_size, get_dpp());
 	if (result < 0)
 	  break;
 
@@ -6888,7 +6907,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
       { // zero
 	result = check_offset_and_length(
 	  op.extent.offset, op.extent.length,
-          static_cast<Option::size_t>(osd->osd_max_object_size), get_dpp());
+          *osd->osd_max_object_size, get_dpp());
 	if (result < 0)
 	  break;
 
@@ -6953,7 +6972,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 
         result = check_offset_and_length(
 	  op.extent.offset, op.extent.length,
-          static_cast<Option::size_t>(osd->osd_max_object_size), get_dpp());
+          *osd->osd_max_object_size, get_dpp());
         if (result < 0)
 	  break;
 
@@ -7767,27 +7786,34 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	bool truncated = false;
 	bufferlist bl;
 	if (oi.is_omap()) {
-	  ObjectMap::ObjectMapIterator iter = osd->store->get_omap_iterator(
-	    ch, ghobject_t(soid)
-	    );
-          if (!iter) {
-            result = -ENOENT;
-            goto fail;
-          }
-	  iter->upper_bound(start_after);
-	  if (filter_prefix > start_after) iter->lower_bound(filter_prefix);
-	  for (num = 0;
-	       iter->valid() &&
-		 iter->key().substr(0, filter_prefix.size()) == filter_prefix;
-	       ++num, iter->next()) {
-	    dout(20) << "Found key " << iter->key() << dendl;
-	    if (num >= max_return ||
-		bl.length() >= cct->_conf->osd_max_omap_bytes_per_request) {
-	      truncated = true;
-	      break;
-	    }
-	    encode(iter->key(), bl);
-	    encode(iter->value(), bl);
+	  using omap_iter_seek_t = ObjectStore::omap_iter_seek_t;
+	  result = osd->store->omap_iterate(
+	    ch, ghobject_t(soid),
+	    // try to seek as many keys-at-once as possible for the sake of performance.
+	    // note complexity should be logarithmic, so seek(n/2) + seek(n/2) is worse
+	    // than just seek(n).
+	    ObjectStore::omap_iter_seek_t{
+	      .seek_position = std::max(start_after, filter_prefix),
+	      .seek_type = filter_prefix > start_after ? omap_iter_seek_t::LOWER_BOUND
+						       : omap_iter_seek_t::UPPER_BOUND
+	    },
+	    [&bl, &truncated, &filter_prefix, &num, max_return,
+	     max_bytes=cct->_conf->osd_max_omap_bytes_per_request]
+	    (std::string_view key, std::string_view value) mutable {
+	      if (key.substr(0, filter_prefix.size()) != filter_prefix) {
+	        return ObjectStore::omap_iter_ret_t::STOP;
+	      }
+	      if (num >= max_return || bl.length() >= max_bytes) {
+	        truncated = true;
+	        return ObjectStore::omap_iter_ret_t::STOP;
+	      }
+	      encode(key, bl);
+	      encode(value, bl);
+	      ++num;
+	      return ObjectStore::omap_iter_ret_t::NEXT;
+	    });
+	  if (result < 0) {
+	    goto fail;
 	  }
 	} // else return empty out_set
 	encode(num, osd_op.outdata);

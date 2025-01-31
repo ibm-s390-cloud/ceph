@@ -159,6 +159,7 @@ smallmds=0
 short=0
 crimson=0
 ec=0
+cephexporter=0
 cephadm=0
 parallel=true
 restart=1
@@ -233,6 +234,7 @@ options:
 	-G disable Kerberos/GSSApi authentication
 	--hitset <pool> <hit_set_type>: enable hitset tracking
 	-e : create an erasure pool
+	--cephexporter: start the ceph-exporter daemon
 	-o config add extra config parameters to all sections
 	--rgw_port specify ceph rgw http listen port
 	--rgw_frontend specify the rgw frontend configuration
@@ -293,7 +295,7 @@ parse_block_devs() {
     IFS=',' read -r -a block_devs <<< "$devs"
     for dev in "${block_devs[@]}"; do
         if [ ! -b $dev ] || [ ! -w $dev ]; then
-            echo "All $opt_name must refer to writable block devices"
+            echo "All $opt_name must refer to writable block devices, check device: $dev"
             exit 1
         fi
     done
@@ -308,7 +310,7 @@ parse_bluestore_db_devs() {
     IFS=',' read -r -a bluestore_db_devs <<< "$devs"
     for dev in "${bluestore_db_devs[@]}"; do
         if [ ! -b $dev ] || [ ! -w $dev ]; then
-            echo "All $opt_name must refer to writable block devices"
+            echo "All $opt_name must refer to writable block devices, check device: $dev"
             exit 1
         fi
     done
@@ -323,7 +325,7 @@ parse_bluestore_wal_devs() {
     IFS=',' read -r -a bluestore_wal_devs <<< "$devs"
     for dev in "${bluestore_wal_devs[@]}"; do
         if [ ! -b $dev ] || [ ! -w $dev ]; then
-            echo "All $opt_name must refer to writable block devices"
+            echo "All $opt_name must refer to writable block devices, check device: $dev"
             exit 1
         fi
     done
@@ -338,7 +340,7 @@ parse_secondary_devs() {
     IFS=',' read -r -a secondary_block_devs <<< "$devs"
     for dev in "${secondary_block_devs[@]}"; do
         if [ ! -b $dev ] || [ ! -w $dev ]; then
-            echo "All $opt_name must refer to writable block devices"
+            echo "All $opt_name must refer to writable block devices, check device: $dev"
             exit 1
         fi
     done
@@ -371,6 +373,9 @@ case $1 in
         ;;
     -e)
         ec=1
+        ;;
+    --cephexporter)
+        cephexporter=1
         ;;
     --new | -n)
         new=1
@@ -963,7 +968,17 @@ $BLUESTORE_OPTS
 
         ; kstore
         kstore fsck on mount = true
+EOF
+    if [ "$crimson" -eq 1 ]; then
+        wconf <<EOF
+        crimson osd objectstore = $objectstore
+EOF
+    else
+        wconf <<EOF
         osd objectstore = $objectstore
+EOF
+    fi
+    wconf <<EOF
 $SEASTORE_OPTS
 $COSDSHORT
         $(format_conf "${extra_conf}")
@@ -974,7 +989,7 @@ $DAEMONOPTS
 $CMONDEBUG
         $(format_conf "${extra_conf}")
         mon cluster log file = $CEPH_OUT_DIR/cluster.mon.\$id.log
-        osd pool default erasure code profile = plugin=jerasure technique=reed_sol_van k=2 m=1 crush-failure-domain=osd
+        osd pool default erasure code profile = plugin=isa technique=reed_sol_van k=2 m=1 crush-failure-domain=osd
         auth allow insecure global id reclaim = false
 EOF
 
@@ -1128,6 +1143,17 @@ EOF
     if [ -n "$use_crush_tunables" ]; then
         $CEPH_BIN/ceph osd crush tunables $use_crush_tunables
     fi
+}
+
+start_cephexporter() {
+    debug echo "Starting Ceph exporter daemon..."
+
+    # Define socket directory for the exporter
+    # Start the exporter daemon 
+    prunb ceph-exporter \
+        -c "$conf_fn" \
+        --sock-dir "$CEPH_ASOK_DIR" \
+        --addrs "$IP"
 }
 
 start_osd() {
@@ -1676,28 +1702,30 @@ if [ "$ceph_osd" == "crimson-osd" ]; then
     if [ "$trace" -ne 0 ]; then
         extra_seastar_args=" --trace"
     fi
-    if [ "$(expr $(nproc) - 1)" -gt "$(($CEPH_NUM_OSD * crimson_smp))" ]; then
-        if [ $crimson_alien_num_cores -gt 0 ]; then
-            alien_bottom_cpu=$(($CEPH_NUM_OSD * crimson_smp))
-            alien_top_cpu=$(( alien_bottom_cpu + crimson_alien_num_cores - 1 ))
-            # Ensure top value within range:
-            if [ "$(($alien_top_cpu))" -gt "$(expr $(nproc) - 1)" ]; then
-                alien_top_cpu=$(expr $(nproc) - 1)
+    if [ "$objectstore" == "bluestore" ]; then
+        if [ "$(expr $(nproc) - 1)" -gt "$(($CEPH_NUM_OSD * crimson_smp))" ]; then
+            if [ $crimson_alien_num_cores -gt 0 ]; then
+                alien_bottom_cpu=$(($CEPH_NUM_OSD * crimson_smp))
+                alien_top_cpu=$(( alien_bottom_cpu + crimson_alien_num_cores - 1 ))
+                # Ensure top value within range:
+                if [ "$(($alien_top_cpu))" -gt "$(expr $(nproc) - 1)" ]; then
+                    alien_top_cpu=$(expr $(nproc) - 1)
+                fi
+                echo "crimson_alien_thread_cpu_cores: $alien_bottom_cpu-$alien_top_cpu"
+                # This is a (logical) processor id range, it could be refined to encompass only physical processor ids
+                # (equivalently, ignore hyperthreading sibling processor ids)
+                $CEPH_BIN/ceph -c $conf_fn config set osd crimson_alien_thread_cpu_cores "$alien_bottom_cpu-$alien_top_cpu"
+            else
+                echo "crimson_alien_thread_cpu_cores:" $(($CEPH_NUM_OSD * crimson_smp))-"$(expr $(nproc) - 1)"
+                $CEPH_BIN/ceph -c $conf_fn config set osd crimson_alien_thread_cpu_cores $(($CEPH_NUM_OSD * crimson_smp))-"$(expr $(nproc) - 1)"
             fi
-            echo "crimson_alien_thread_cpu_cores: $alien_bottom_cpu-$alien_top_cpu"
-            # This is a (logical) processor id range, it could be refined to encompass only physical processor ids
-            # (equivalently, ignore hyperthreading sibling processor ids)
-            $CEPH_BIN/ceph -c $conf_fn config set osd crimson_alien_thread_cpu_cores "$alien_bottom_cpu-$alien_top_cpu"
+            if [ $crimson_alien_num_threads -gt 0 ]; then
+                echo "$CEPH_BIN/ceph -c $conf_fn config set osd crimson_alien_op_num_threads $crimson_alien_num_threads"
+                $CEPH_BIN/ceph -c $conf_fn config set osd crimson_alien_op_num_threads "$crimson_alien_num_threads"
+            fi
         else
-            echo "crimson_alien_thread_cpu_cores:" $(($CEPH_NUM_OSD * crimson_smp))-"$(expr $(nproc) - 1)"
-            $CEPH_BIN/ceph -c $conf_fn config set osd crimson_alien_thread_cpu_cores $(($CEPH_NUM_OSD * crimson_smp))-"$(expr $(nproc) - 1)"
+          echo "No alien thread cpu core isolation"
         fi
-        if [ $crimson_alien_num_threads -gt 0 ]; then
-            echo "$CEPH_BIN/ceph -c $conf_fn config set osd crimson_alien_op_num_threads $crimson_alien_num_threads"
-            $CEPH_BIN/ceph -c $conf_fn config set osd crimson_alien_op_num_threads "$crimson_alien_num_threads"
-        fi
-    else
-      echo "No alien thread cpu core isolation"
     fi
 fi
 
@@ -1724,6 +1752,10 @@ if [ $CEPH_NUM_MDS -gt 0 ]; then
     start_mds
     # key with access to all FS
     ceph_adm fs authorize \* "client.fs" / rwp >> "$keyring_fn"
+fi
+
+if [ "$cephexporter" -eq 1 ]; then
+    start_cephexporter
 fi
 
 # Don't set max_mds until all the daemons are started, otherwise

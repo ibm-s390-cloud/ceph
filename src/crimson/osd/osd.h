@@ -188,6 +188,7 @@ private:
   seastar::future<> _preboot(version_t oldest_osdmap, version_t newest_osdmap);
   seastar::future<> _send_boot();
   seastar::future<> _add_me_to_crush();
+  seastar::future<> _add_device_class();
 
   seastar::future<> osdmap_subscribe(version_t epoch, bool force_request);
 
@@ -232,6 +233,8 @@ private:
   seastar::future<> handle_update_log_missing_reply(
     crimson::net::ConnectionRef conn,
     Ref<MOSDPGUpdateLogMissingReply> m);
+
+  std::vector<DaemonHealthMetric> get_health_metrics();
 
 private:
   crimson::common::gate_per_shard gate;

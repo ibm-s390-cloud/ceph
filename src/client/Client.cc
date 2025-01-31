@@ -8907,7 +8907,6 @@ int Client::chownat(int dirfd, const char *relpath, uid_t new_uid, gid_t new_gid
   tout(cct) << new_gid << std::endl;
   tout(cct) << flags << std::endl;
 
-  filepath path(relpath);
   InodeRef in;
   InodeRef dirinode;
 
@@ -8917,10 +8916,24 @@ int Client::chownat(int dirfd, const char *relpath, uid_t new_uid, gid_t new_gid
     return r;
   }
 
-  r = path_walk(path, &in, perms, !(flags & AT_SYMLINK_NOFOLLOW), 0, dirinode);
-  if (r < 0) {
-    return r;
+  if (!strcmp(relpath, "")) {
+#if defined(__linux__) && defined(AT_EMPTY_PATH)
+    if (flags & AT_EMPTY_PATH) {
+      in = dirinode;
+      goto out;
+    }
+#endif
+    return -CEPHFS_ENOENT;
+  } else {
+    filepath path(relpath);
+    r = path_walk(path, &in, perms, !(flags & AT_SYMLINK_NOFOLLOW), 0, dirinode);
+    if (r < 0) {
+      return r;
+    }
   }
+
+out:
+
   struct stat attr;
   attr.st_uid = new_uid;
   attr.st_gid = new_gid;
@@ -10977,7 +10990,7 @@ retry:
     // C_Read_Sync_NonBlocking::finish().
 
     // trim read based on file size?
-    if ((offset >= in->size) || (size == 0)) {
+    if (std::cmp_greater_equal(offset, in->size) || (size == 0)) {
       // read is requested at the EOF or the read len is zero, therefore just
       // release managed pointers and complete the C_Read_Finisher immediately with 0 bytes
 
@@ -11740,8 +11753,12 @@ int64_t Client::_write(Fh *f, int64_t offset, uint64_t size, const char *buf,
       cond_iofinish = new C_SaferCond();
       filer_iofinish.reset(cond_iofinish);
     } else {
-      //Register a wrapper callback for the C_Write_Finisher which takes 'client_lock'
-      filer_iofinish.reset(new C_Lock_Client_Finisher(this, iofinish.get()));
+      //Register a wrapper callback C_Lock_Client_Finisher for the C_Write_Finisher which takes 'client_lock'.
+      //Use C_OnFinisher for callbacks. The op_cancel_writes has to be called without 'client_lock' held because
+      //the callback registered here needs to take it. This would cause incorrect lock order i.e., objecter->rwlock
+      //taken by objecter's op_cancel and then 'client_lock' taken by callback. To fix the lock order, queue
+      //the callback using the finisher
+      filer_iofinish.reset(new C_OnFinisher(new C_Lock_Client_Finisher(this, iofinish.get()), &objecter_finisher));
     }
 
     get_cap_ref(in, CEPH_CAP_FILE_BUFFER);
@@ -12230,6 +12247,7 @@ int Client::statxat(int dirfd, const char *relpath,
 
   unsigned mask = statx_to_mask(flags, want);
 
+  InodeRef in;
   InodeRef dirinode;
   std::scoped_lock lock(client_lock);
   int r = get_fd_inode(dirfd, &dirinode);
@@ -12237,12 +12255,24 @@ int Client::statxat(int dirfd, const char *relpath,
     return r;
   }
 
-  InodeRef in;
-  filepath path(relpath);
-  r = path_walk(path, &in, perms, !(flags & AT_SYMLINK_NOFOLLOW), mask, dirinode);
-  if (r < 0) {
-    return r;
+  if (!strcmp(relpath, "")) {
+#if defined(__linux__) && defined(AT_EMPTY_PATH)
+    if (flags & AT_EMPTY_PATH) {
+      in = dirinode;
+      goto out;
+    }
+#endif
+    return -CEPHFS_ENOENT;
+  } else {
+    filepath path(relpath);
+    r = path_walk(path, &in, perms, !(flags & AT_SYMLINK_NOFOLLOW), mask, dirinode);
+    if (r < 0) {
+      return r;
+    }
   }
+
+out:
+
   r = _getattr(in, mask, perms);
   if (r < 0) {
     ldout(cct, 3) << __func__ << " exit on error!" << dendl;

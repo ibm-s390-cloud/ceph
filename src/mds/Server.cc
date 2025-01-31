@@ -1350,6 +1350,9 @@ void Server::evict_cap_revoke_non_responders() {
 }
 
 void Server::handle_conf_change(const std::set<std::string>& changed) {
+  if (changed.count("mds_allow_async_dirops")){
+    mds_allow_async_dirops = g_conf().get_val<bool>("mds_allow_async_dirops");
+  }
   if (changed.count("mds_forward_all_requests_to_auth")){
     forward_all_requests_to_auth = g_conf().get_val<bool>("mds_forward_all_requests_to_auth");
   }
@@ -2522,7 +2525,7 @@ void Server::set_reply_extra_bl(const cref_t<MClientRequest> &req, inodeno_t ino
 {
   Session *session = mds->get_session(req);
 
-  if (session->info.has_feature(CEPHFS_FEATURE_DELEG_INO)) {
+  if (mds_allow_async_dirops && session->info.has_feature(CEPHFS_FEATURE_DELEG_INO)) {
     openc_response_t ocresp;
 
     dout(10) << "adding created_ino and delegated_inos" << dendl;
@@ -4167,7 +4170,7 @@ void Server::handle_client_getattr(const MDRequestRef& mdr, bool is_lookup)
 
     if (r < 0) {
       // fall-thru. let rdlock_path_pin_ref() check again.
-    } else if (is_lookup) {
+    } else if (is_lookup && mdr->dn[0].size()) {
       CDentry* dn = mdr->dn[0].back();
       mdr->pin(dn);
       auto em = dn->batch_ops.emplace(std::piecewise_construct, std::forward_as_tuple(mask), std::forward_as_tuple());
@@ -4274,7 +4277,7 @@ void Server::handle_client_getattr(const MDRequestRef& mdr, bool is_lookup)
   // reply
   dout(10) << "reply to stat on " << *req << dendl;
   mdr->tracei = ref;
-  if (is_lookup)
+  if (is_lookup && mdr->dn[0].size())
     mdr->tracedn = mdr->dn[0].back();
   respond_to_request(mdr, 0);
 }
@@ -4815,7 +4818,7 @@ void Server::handle_client_openc(const MDRequestRef& mdr)
   if (!check_dir_max_entries(mdr, dir))
     return;
 
-  if (mdr->dn[0].size() == 1)
+  if (mds_allow_async_dirops && mdr->dn[0].size() == 1)
     mds->locker->create_lock_cache(mdr, diri, &mdr->dir_layout);
 
   // create inode.
@@ -8196,7 +8199,7 @@ void Server::handle_client_unlink(const MDRequestRef& mdr)
       return;  // we're waiting for a witness.
   }
 
-  if (!rmdir && dnl->is_primary() && mdr->dn[0].size() == 1)
+  if (mds_allow_async_dirops && !rmdir && dnl->is_primary() && mdr->dn[0].size() == 1)
     mds->locker->create_lock_cache(mdr, diri);
 
   // ok!

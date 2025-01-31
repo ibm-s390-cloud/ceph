@@ -284,7 +284,7 @@ class TestISCSIService:
 
     @patch("cephadm.serve.CephadmServe._run_cephadm")
     @patch("cephadm.module.CephadmOrchestrator.get_unique_name")
-    @patch("cephadm.services.iscsi.IscsiService.get_trusted_ips")
+    @patch("cephadm.services.iscsi.get_trusted_ips")
     def test_iscsi_config(self, _get_trusted_ips, _get_name, _run_cephadm, cephadm_module: CephadmOrchestrator):
 
         iscsi_daemon_id = 'testpool.test.qwert'
@@ -349,6 +349,7 @@ log_to_file = False"""
                             },
                         }
                     }),
+                    error_ok=True,
                     use_current_daemon_image=False,
                 )
 
@@ -397,10 +398,17 @@ enable_auth = False
 state_update_notify = True
 state_update_interval_sec = 5
 enable_spdk_discovery_controller = False
+enable_key_encryption = True
+encryption_key = /encryption.key
+rebalance_period_sec = 7
+max_gws_in_grp = 16
+max_ns_to_change_lb_grp = 8
 enable_prometheus_exporter = True
 prometheus_exporter_ssl = False
 prometheus_port = 10008
+prometheus_stats_interval = 10
 verify_nqns = True
+verify_keys = True
 omap_file_lock_duration = 20
 omap_file_lock_retries = 30
 omap_file_lock_retry_sleep_interval = 1.0
@@ -409,8 +417,12 @@ allowed_consecutive_spdk_ping_failures = 1
 spdk_ping_interval_in_seconds = 2.0
 ping_spdk_under_lock = False
 enable_monitor_client = True
-max_hosts_per_namespace = 1
+max_hosts_per_namespace = 8
 max_namespaces_with_netmask = 1000
+max_subsystems = 128
+max_namespaces = 1024
+max_namespaces_per_subsystem = 256
+max_hosts_per_subsystem = 32
 
 [gateway-logs]
 log_level = INFO
@@ -469,11 +481,11 @@ timeout = 1.0\n"""
                         "image": "",
                         "deploy_arguments": [],
                         "params": {
-                            "tcp_ports": [5500, 4420, 8009]
+                            "tcp_ports": [5500, 4420, 8009, 10008]
                         },
                         "meta": {
                             "service_name": "nvmeof.testpool",
-                            "ports": [5500, 4420, 8009],
+                            "ports": [5500, 4420, 8009, 10008],
                             "ip": None,
                             "deployed_by": [],
                             "rank": None,
@@ -489,6 +501,7 @@ timeout = 1.0\n"""
                             }
                         }
                     }),
+                    error_ok=True,
                     use_current_daemon_image=False,
                 )
 
@@ -568,7 +581,14 @@ class TestMonitoring:
         mock_getfqdn.return_value = purl.hostname
 
         with with_host(cephadm_module, "test"):
-            with with_service(cephadm_module, AlertManagerSpec()):
+            cephadm_module.cache.update_host_networks('test', {
+                '1.2.3.0/24': {
+                    'if0': ['1.2.3.1']
+                },
+            })
+            with with_service(cephadm_module, AlertManagerSpec('alertmanager',
+                                                               networks=['1.2.3.0/24'],
+                                                               only_bind_port_on_networks=True)):
                 y = dedent(self._get_config(expected_yaml_url)).lstrip()
                 _run_cephadm.assert_called_with(
                     'test',
@@ -582,11 +602,12 @@ class TestMonitoring:
                         "deploy_arguments": [],
                         "params": {
                             'tcp_ports': [9093, 9094],
+                            'port_ips': {"9094": "1.2.3.1"},
                         },
                         "meta": {
                             'service_name': 'alertmanager',
                             'ports': [9093, 9094],
-                            'ip': None,
+                            'ip': '1.2.3.1',
                             'deployed_by': [],
                             'rank': None,
                             'rank_generation': None,
@@ -599,8 +620,10 @@ class TestMonitoring:
                             },
                             "peers": [],
                             "use_url_prefix": False,
+                            "ip_to_bind_to": "1.2.3.1",
                         }
                     }),
+                    error_ok=True,
                     use_current_daemon_image=False,
                 )
 
@@ -620,8 +643,16 @@ class TestMonitoring:
             cephadm_module.secure_monitoring_stack = True
             cephadm_module.set_store(AlertmanagerService.USER_CFG_KEY, 'alertmanager_user')
             cephadm_module.set_store(AlertmanagerService.PASS_CFG_KEY, 'alertmanager_plain_password')
+
+            cephadm_module.cache.update_host_networks('test', {
+                'fd12:3456:789a::/64': {
+                    'if0': ['fd12:3456:789a::10']
+                },
+            })
             with with_service(cephadm_module, MgmtGatewaySpec("mgmt-gateway")) as _, \
-                 with_service(cephadm_module, AlertManagerSpec()):
+                 with_service(cephadm_module, AlertManagerSpec('alertmanager',
+                                                               networks=['fd12:3456:789a::/64'],
+                                                               only_bind_port_on_networks=True)):
 
                 y = dedent("""
                 # This file is generated by cephadm.
@@ -632,6 +663,8 @@ class TestMonitoring:
                   http_config:
                     tls_config:
                       ca_file: root_cert.pem
+                      cert_file: alertmanager.crt
+                      key_file: alertmanager.key
 
                 route:
                   receiver: 'default'
@@ -672,11 +705,12 @@ class TestMonitoring:
                         "deploy_arguments": [],
                         "params": {
                             'tcp_ports': [9093, 9094],
+                            'port_ips': {"9094": "fd12:3456:789a::10"}
                         },
                         "meta": {
                             'service_name': 'alertmanager',
                             'ports': [9093, 9094],
-                            'ip': None,
+                            'ip': 'fd12:3456:789a::10',
                             'deployed_by': [],
                             'rank': None,
                             'rank_generation': None,
@@ -694,8 +728,10 @@ class TestMonitoring:
                             'peers': [],
                             'web_config': '/etc/alertmanager/web.yml',
                             "use_url_prefix": True,
+                            "ip_to_bind_to": "fd12:3456:789a::10",
                         }
                     }),
+                    error_ok=True,
                     use_current_daemon_image=False,
                 )
 
@@ -726,6 +762,8 @@ class TestMonitoring:
                   http_config:
                     tls_config:
                       ca_file: root_cert.pem
+                      cert_file: alertmanager.crt
+                      key_file: alertmanager.key
 
                 route:
                   receiver: 'default'
@@ -786,8 +824,10 @@ class TestMonitoring:
                             'peers': [],
                             'web_config': '/etc/alertmanager/web.yml',
                             "use_url_prefix": False,
+                            "ip_to_bind_to": "",
                         }
                     }),
+                    error_ok=True,
                     use_current_daemon_image=False,
                 )
 
@@ -833,6 +873,7 @@ class TestMonitoring:
                                                         "files": {
                                                             "ceph-exporter.crt": "mycert",
                                                             "ceph-exporter.key": "mykey"}}}),
+                                                error_ok=True,
                                                 use_current_daemon_image=False)
 
     @patch("cephadm.serve.CephadmServe._run_cephadm")
@@ -876,6 +917,7 @@ class TestMonitoring:
                         },
                         "config_blobs": {}
                     }),
+                    error_ok=True,
                     use_current_daemon_image=False,
                 )
 
@@ -936,6 +978,7 @@ class TestMonitoring:
                             'web_config': '/etc/node-exporter/web.yml',
                         }
                     }),
+                    error_ok=True,
                     use_current_daemon_image=False,
                 )
 
@@ -1071,6 +1114,7 @@ class TestMonitoring:
                             "use_url_prefix": False
                         },
                     }),
+                    error_ok=True,
                     use_current_daemon_image=False,
                 )
 
@@ -1150,6 +1194,8 @@ class TestMonitoring:
                             password: sd_password
                           tls_config:
                             ca_file: root_cert.pem
+                            cert_file: prometheus.crt
+                            key_file:  prometheus.key
 
                 scrape_configs:
                   - job_name: 'ceph'
@@ -1171,6 +1217,8 @@ class TestMonitoring:
                         password: sd_password
                       tls_config:
                         ca_file: root_cert.pem
+                        cert_file: prometheus.crt
+                        key_file:  prometheus.key
 
                   - job_name: 'node'
                     relabel_configs:
@@ -1189,6 +1237,8 @@ class TestMonitoring:
                         password: sd_password
                       tls_config:
                         ca_file: root_cert.pem
+                        cert_file: prometheus.crt
+                        key_file:  prometheus.key
 
                   - job_name: 'haproxy'
                     relabel_configs:
@@ -1205,6 +1255,8 @@ class TestMonitoring:
                         password: sd_password
                       tls_config:
                         ca_file: root_cert.pem
+                        cert_file: prometheus.crt
+                        key_file:  prometheus.key
 
                   - job_name: 'ceph-exporter'
                     relabel_configs:
@@ -1222,6 +1274,8 @@ class TestMonitoring:
                         password: sd_password
                       tls_config:
                         ca_file: root_cert.pem
+                        cert_file: prometheus.crt
+                        key_file:  prometheus.key
 
                   - job_name: 'nvmeof'
                     honor_labels: true
@@ -1235,6 +1289,8 @@ class TestMonitoring:
                         password: sd_password
                       tls_config:
                         ca_file: root_cert.pem
+                        cert_file: prometheus.crt
+                        key_file:  prometheus.key
 
                   - job_name: 'nfs'
                     honor_labels: true
@@ -1248,6 +1304,8 @@ class TestMonitoring:
                         password: sd_password
                       tls_config:
                         ca_file: root_cert.pem
+                        cert_file: prometheus.crt
+                        key_file:  prometheus.key
 
                   - job_name: 'smb'
                     honor_labels: true
@@ -1261,6 +1319,8 @@ class TestMonitoring:
                         password: sd_password
                       tls_config:
                         ca_file: root_cert.pem
+                        cert_file: prometheus.crt
+                        key_file:  prometheus.key
 
                 """).lstrip()
 
@@ -1303,6 +1363,7 @@ class TestMonitoring:
                             "use_url_prefix": False
                         },
                     }),
+                    error_ok=True,
                     use_current_daemon_image=False,
                 )
 
@@ -1379,6 +1440,7 @@ class TestMonitoring:
                             },
                         },
                     }),
+                    error_ok=True,
                     use_current_daemon_image=False,
                 )
 
@@ -1438,6 +1500,7 @@ class TestMonitoring:
                             },
                         },
                     }),
+                    error_ok=True,
                     use_current_daemon_image=False,
                 )
 
@@ -1588,6 +1651,7 @@ class TestMonitoring:
                             "files": files,
                         },
                     }),
+                    error_ok=True,
                     use_current_daemon_image=False,
                 )
 
@@ -1718,6 +1782,7 @@ class TestMonitoring:
                             "files": files,
                         },
                     }),
+                    error_ok=True,
                     use_current_daemon_image=False,
                 )
 
@@ -1831,6 +1896,7 @@ class TestMonitoring:
                             "files": files,
                         },
                     }),
+                    error_ok=True,
                     use_current_daemon_image=False,
                 )
 
@@ -2005,6 +2071,7 @@ spec:
                             },
                             "config_blobs": {},
                         }),
+                        error_ok=True,
                         use_current_daemon_image=False,
                     )
 
@@ -2043,6 +2110,26 @@ class TestRGWService:
                     'key': 'rgw_frontends',
                 })
                 assert f == expected
+
+    @pytest.mark.parametrize(
+        "disable_sync_traffic",
+        [
+            (True),
+            (False),
+        ]
+    )
+    @patch("cephadm.serve.CephadmServe._run_cephadm", _run_cephadm('{}'))
+    def test_rgw_disable_sync_traffic(self, disable_sync_traffic, cephadm_module: CephadmOrchestrator):
+        with with_host(cephadm_module, 'host1'):
+            s = RGWSpec(service_id="foo",
+                        disable_multisite_sync_traffic=disable_sync_traffic)
+            with with_service(cephadm_module, s) as dds:
+                _, f, _ = cephadm_module.check_mon_command({
+                    'prefix': 'config get',
+                    'who': f'client.{dds[0]}',
+                    'key': 'rgw_run_sync_thread',
+                })
+                assert f == ('false' if disable_sync_traffic else 'true')
 
 
 class TestMonService:
@@ -2112,6 +2199,7 @@ class TestSNMPGateway:
                         },
                         "config_blobs": config,
                     }),
+                    error_ok=True,
                     use_current_daemon_image=False,
                 )
 
@@ -2160,6 +2248,7 @@ class TestSNMPGateway:
                         },
                         "config_blobs": config,
                     }),
+                    error_ok=True,
                     use_current_daemon_image=False,
                 )
 
@@ -2212,6 +2301,7 @@ class TestSNMPGateway:
                         },
                         "config_blobs": config,
                     }),
+                    error_ok=True,
                     use_current_daemon_image=False,
                 )
 
@@ -2269,6 +2359,7 @@ class TestSNMPGateway:
                         },
                         "config_blobs": config,
                     }),
+                    error_ok=True,
                     use_current_daemon_image=False,
                 )
 
@@ -3361,6 +3452,7 @@ class TestJaeger:
                         },
                         "config_blobs": config,
                     }),
+                    error_ok=True,
                     use_current_daemon_image=False,
                 )
 
@@ -3401,6 +3493,7 @@ class TestJaeger:
                         },
                         "config_blobs": es_config,
                     }),
+                    error_ok=True,
                     use_current_daemon_image=False,
                 )
                 with with_service(cephadm_module, collector_spec):
@@ -3429,6 +3522,7 @@ class TestJaeger:
                             },
                             "config_blobs": collector_config,
                         }),
+                        error_ok=True,
                         use_current_daemon_image=False,
                     )
 
@@ -3469,6 +3563,7 @@ class TestJaeger:
                         },
                         "config_blobs": collector_config,
                     }),
+                    error_ok=True,
                     use_current_daemon_image=False,
                 )
                 with with_service(cephadm_module, agent_spec):
@@ -3497,6 +3592,7 @@ class TestJaeger:
                             },
                             "config_blobs": agent_config,
                         }),
+                        error_ok=True,
                         use_current_daemon_image=False,
                     )
 
@@ -3554,6 +3650,7 @@ class TestCustomContainer:
                             },
                         }
                     ),
+                    error_ok=True,
                     use_current_daemon_image=False,
                 )
 
@@ -3641,6 +3738,7 @@ class TestCustomContainer:
                     ['_orch', 'deploy'],
                     [],
                     stdin=json.dumps(expected),
+                    error_ok=True,
                     use_current_daemon_image=False,
                 )
 
@@ -3694,6 +3792,7 @@ class TestSMB:
                     ['_orch', 'deploy'],
                     [],
                     stdin=json.dumps(expected),
+                    error_ok=True,
                     use_current_daemon_image=False,
                 )
 
@@ -3766,6 +3865,7 @@ class TestSMB:
                     ['_orch', 'deploy'],
                     [],
                     stdin=json.dumps(expected),
+                    error_ok=True,
                     use_current_daemon_image=False,
                 )
 
@@ -3834,6 +3934,7 @@ class TestMgmtGateway:
                                          http {
 
                                              #access_log /dev/stdout;
+                                             error_log /dev/stderr info;
                                              client_header_buffer_size 32K;
                                              large_client_header_buffers 4 32k;
                                              proxy_busy_buffers_size 512k;
@@ -4011,6 +4112,7 @@ class TestMgmtGateway:
                     ['_orch', 'deploy'],
                     [],
                     stdin=json.dumps(expected),
+                    error_ok=True,
                     use_current_daemon_image=False,
                 )
 
@@ -4080,6 +4182,7 @@ class TestMgmtGateway:
                                          http {
 
                                              #access_log /dev/stdout;
+                                             error_log /dev/stderr info;
                                              client_header_buffer_size 32K;
                                              large_client_header_buffers 4 32k;
                                              proxy_busy_buffers_size 512k;
@@ -4352,6 +4455,7 @@ class TestMgmtGateway:
                     ['_orch', 'deploy'],
                     [],
                     stdin=json.dumps(expected),
+                    error_ok=True,
                     use_current_daemon_image=False,
                 )
 
@@ -4475,5 +4579,6 @@ class TestMgmtGateway:
                     ['_orch', 'deploy'],
                     [],
                     stdin=json.dumps(expected),
+                    error_ok=True,
                     use_current_daemon_image=False,
                 )

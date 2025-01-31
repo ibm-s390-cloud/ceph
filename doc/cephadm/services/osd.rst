@@ -110,7 +110,7 @@ general form of the command above:
 
    "3.64 TB"
 
-This means that the exact device size is 3.64 * 1000, or 3640GB.
+This means that the exact device size is 3.64 TB, or 3640GB.
 
 This procedure was developed by Frédéric Nass. See `this thread on the
 [ceph-users] mailing list
@@ -197,6 +197,18 @@ There are a few ways to create new OSDs:
     ceph orch apply -i spec.yml
 
 .. warning:: When deploying new OSDs with ``cephadm``, ensure that the ``ceph-osd`` package is not already installed on the target host. If it is installed, conflicts may arise in the management and control of the OSD that may lead to errors or unexpected behavior.
+
+* OSDs created via ``ceph orch daemon add`` are by default not added to the orchestrator's OSD service, they get added to 'osd' service. To attach an OSD to a different, existing OSD service, issue a command of the following form:
+
+  .. prompt:: bash *
+
+    ceph orch osd set-spec-affinity <service_name> <osd_id(s)>
+
+  For example:
+
+  .. prompt:: bash #
+
+    ceph orch osd set-spec-affinity osd.default_drive_group 0 1
 
 Dry Run
 -------

@@ -856,6 +856,16 @@
           },
         },
         {
+          alert: 'NVMeoFMultipleNamespacesOfRBDImage',
+          'for': '1m',
+          expr: 'count by(pool_name, rbd_name) (count by(bdev_name, pool_name, rbd_name) (ceph_nvmeof_bdev_metadata and on (bdev_name) ceph_nvmeof_subsystem_namespace_metadata)) > 1',
+          labels: { severity: 'warning', type: 'ceph_default' },
+          annotations: {
+            summary: 'RBD image {{ $labels.pool_name }}/{{ $labels.rbd_name }} cannot be reused for multiple NVMeoF namespace ',
+            description: 'Each NVMeoF namespace must have a unique RBD pool and image, across all different gateway groups.',
+          },
+        },
+        {
           alert: 'NVMeoFTooManyGateways',
           'for': '1m',
           expr: 'count(ceph_nvmeof_gateway_info) by (cluster) > %.2f' % [$._config.NVMeoFMaxGatewaysPerCluster],
@@ -908,11 +918,21 @@
         {
           alert: 'NVMeoFTooManySubsystems',
           'for': '1m',
-          expr: 'count by(gateway_host, cluster) (label_replace(ceph_nvmeof_subsystem_metadata,"gateway_host","$1","instance","(.*):.*")) > %.2f' % [$._config.NVMeoFMaxSubsystemsPerGateway],
+          expr: 'count by(gateway_host, cluster) (label_replace(ceph_nvmeof_subsystem_metadata,"gateway_host","$1","instance","(.*?)(?::.*)?")) > %.2f' % [$._config.NVMeoFMaxSubsystemsPerGateway],
           labels: { severity: 'warning', type: 'ceph_default' },
           annotations: {
             summary: 'The number of subsystems defined to the gateway exceeds supported values%(cluster)s' % $.MultiClusterSummary(),
             description: 'Although you may continue to create subsystems in {{ $labels.gateway_host }}, the configuration may not be supported',
+          },
+        },
+        {
+          alert: 'NVMeoFTooManyNamespaces',
+          'for': '1m',
+          expr: 'sum by(gateway_host, cluster) (label_replace(ceph_nvmeof_subsystem_namespace_count,"gateway_host","$1","instance","(.*?)(?::.*)?")) > %.2f' % [$._config.NVMeoFMaxNamespaces],
+          labels: { severity: 'warning', type: 'ceph_default' },
+          annotations: {
+            summary: 'The number of namespaces defined to the gateway exceeds supported values%(cluster)s' % $.MultiClusterSummary(),
+            description: 'Although you may continue to create namespaces in {{ $labels.gateway_host }}, the configuration may not be supported',
           },
         },
         {

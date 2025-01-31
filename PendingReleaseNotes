@@ -1,5 +1,16 @@
 >=20.0.0
 
+* RGW: The User Account feature introduced in Squid provides first-class support for
+  IAM APIs and policy. Our preliminary STS support was instead based on tenants, and
+  exposed some IAM APIs to admins only. This tenant-level IAM functionality is now
+  deprecated in favor of accounts. While we'll continue to support the tenant feature
+  itself for namespace isolation, the following features will be removed no sooner
+  than the V release:
+    * tenant-level IAM APIs like CreateRole, PutRolePolicy and PutUserPolicy,
+    * use of tenant names instead of accounts in IAM policy documents,
+    * interpretation of IAM policy without cross-account policy evaluation,
+    * S3 API support for cross-tenant names such as `Bucket='tenant:bucketname'`
+
 * RBD: All Python APIs that produce timestamps now return "aware" `datetime`
   objects instead of "naive" ones (i.e. those including time zone information
   instead of those not including it).  All timestamps remain to be in UTC but
@@ -34,6 +45,8 @@
   (--yes-i-really-mean-it). This has been added as a precaution to tell the
   users that modifying "max_mds" may not help with troubleshooting or recovery
   effort. Instead, it might further destabilize the cluster.
+* RADOS: Added convenience function `librados::AioCompletion::cancel()` with
+  the same behavior as `librados::IoCtx::aio_cancel()`.
 
 * mgr/restful, mgr/zabbix: both modules, already deprecated since 2020, have been
   finally removed. They have not been actively maintenance in the last years,
@@ -47,6 +60,26 @@
   fuse client for `fallocate` for the default case (i.e. mode == 0) since
   CephFS does not support disk space reservation. The only flags supported are
   `FALLOC_FL_KEEP_SIZE` and `FALLOC_FL_PUNCH_HOLE`.
+* pybind/rados: Fixes WriteOp.zero() in the original reversed order of arguments
+  `offset` and `length`. When pybind calls WriteOp.zero(), the argument passed
+  does not match rados_write_op_zero, and offset and length are swapped, which
+  results in an unexpected response.
+
+* The HeadBucket API now reports the `X-RGW-Bytes-Used` and `X-RGW-Object-Count`
+  headers only when the `read-stats` querystring is explicitly included in the
+  API request.
+
+>=19.2.1
+
+* CephFS: Command `fs subvolume create` now allows tagging subvolumes through option
+  `--earmark` with a unique identifier needed for NFS or SMB services. The earmark
+  string for a subvolume is empty by default. To remove an already present earmark,
+  an empty string can be assigned to it. Additionally, commands
+  `ceph fs subvolume earmark set`, `ceph fs subvolume earmark get` and
+  `ceph fs subvolume earmark rm` have been added to set, get and remove earmark from a given subvolume.
+
+* RADOS: A performance botteneck in the balancer mgr module has been fixed.
+  Related Tracker: https://tracker.ceph.com/issues/68657
 
 >=19.0.0
 
@@ -315,6 +348,8 @@ CephFS: Disallow delegating preallocated inode ranges to clients. Config
 * NFS: The export create/apply of CephFS based exports will now have a additional parameter `cmount_path` under the FSAL block,
   which specifies the path within the CephFS to mount this export on. If this and the other
   `EXPORT { FSAL {} }` options are the same between multiple exports, those exports will share a single CephFS client. If not specified, the default is `/`.
+* CephFS: MDS emits a warning with estimated replay completion time  when replay
+  runs for more than 30 seconds.
 
 >=18.0.0
 

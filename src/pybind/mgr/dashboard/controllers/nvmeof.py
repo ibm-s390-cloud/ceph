@@ -7,6 +7,7 @@ from orchestrator import OrchestratorError
 from .. import mgr
 from ..model import nvmeof as model
 from ..security import Scope
+from ..services.nvmeof_cli import NvmeofCLICommand
 from ..services.orchestrator import OrchClient
 from ..tools import str_to_bool
 from . import APIDoc, APIRouter, BaseController, CreatePermission, \
@@ -30,6 +31,7 @@ else:
     @APIDoc("NVMe-oF Gateway Management API", "NVMe-oF Gateway")
     class NVMeoFGateway(RESTController):
         @EndpointDoc("Get information about the NVMeoF gateway")
+        @NvmeofCLICommand("nvmeof gw info")
         @map_model(model.GatewayInfo)
         @handle_nvmeof_error
         def list(self, gw_group: Optional[str] = None):
@@ -50,10 +52,87 @@ else:
                 logger.error('Failed to fetch the gateway groups: %s', e)
                 return None
 
+        @ReadPermission
+        @Endpoint('GET', '/version')
+        @NvmeofCLICommand("nvmeof gw version")
+        @map_model(model.GatewayVersion)
+        @handle_nvmeof_error
+        def version(self, gw_group: Optional[str] = None):
+            gw_info = NVMeoFClient(gw_group=gw_group).stub.get_gateway_info(
+                NVMeoFClient.pb2.get_gateway_info_req()
+            )
+            return NVMeoFClient.pb2.gw_version(status=gw_info.status,
+                                               error_message=gw_info.error_message,
+                                               version=gw_info.version)
+
+        @ReadPermission
+        @Endpoint('GET', '/log_level')
+        @NvmeofCLICommand("nvmeof gw get_log_level")
+        @map_model(model.GatewayLogLevelInfo)
+        @handle_nvmeof_error
+        def get_log_level(self, gw_group: Optional[str] = None):
+            gw_log_level = NVMeoFClient(gw_group=gw_group).stub.get_gateway_log_level(
+                NVMeoFClient.pb2.get_gateway_log_level_req()
+            )
+            return gw_log_level
+
+        @ReadPermission
+        @Endpoint('PUT', '/log_level')
+        @NvmeofCLICommand("nvmeof gw set_log_level")
+        @map_model(model.RequestStatus)
+        @handle_nvmeof_error
+        def set_log_level(self, log_level: str, gw_group: Optional[str] = None):
+            log_level = log_level.lower()
+            gw_log_level = NVMeoFClient(gw_group=gw_group).stub.set_gateway_log_level(
+                NVMeoFClient.pb2.set_gateway_log_level_req(log_level=log_level)
+            )
+            return gw_log_level
+
+    @APIRouter("/nvmeof/spdk", Scope.NVME_OF)
+    @APIDoc("NVMe-oF SPDK Management API", "NVMe-oF SPDK")
+    class NVMeoFSpdk(RESTController):
+        @ReadPermission
+        @Endpoint('GET', '/log_level')
+        @NvmeofCLICommand("nvmeof spdk_log_level get")
+        @map_model(model.SpdkNvmfLogFlagsAndLevelInfo)
+        @handle_nvmeof_error
+        def get_spdk_log_level(self, gw_group: Optional[str] = None):
+            spdk_log_level = NVMeoFClient(gw_group=gw_group).stub.get_spdk_nvmf_log_flags_and_level(
+                NVMeoFClient.pb2.get_spdk_nvmf_log_flags_and_level_req()
+            )
+            return spdk_log_level
+
+        @ReadPermission
+        @Endpoint('PUT', '/log_level')
+        @NvmeofCLICommand("nvmeof spdk_log_level set")
+        @map_model(model.RequestStatus)
+        @handle_nvmeof_error
+        def set_spdk_log_level(self, log_level: Optional[str] = None,
+                               print_level: Optional[str] = None, gw_group: Optional[str] = None):
+            log_level = log_level.upper() if log_level else None
+            print_level = print_level.upper() if print_level else None
+            spdk_log_level = NVMeoFClient(gw_group=gw_group).stub.set_gateway_log_level(
+                NVMeoFClient.pb2.set_spdk_nvmf_logs_req(log_level=log_level,
+                                                        print_level=print_level)
+            )
+            return spdk_log_level
+
+        @ReadPermission
+        @Endpoint('PUT', '/log_level/disable')
+        @NvmeofCLICommand("nvmeof spdk_log_level disable")
+        @map_model(model.RequestStatus)
+        @handle_nvmeof_error
+        def disable_spdk_log_level(self, gw_group: Optional[str] = None):
+            spdk_log_level = NVMeoFClient(gw_group=gw_group).stub.disable_spdk_nvmf_logs(
+                NVMeoFClient.pb2.disable_spdk_nvmf_logs_req()
+            )
+            return spdk_log_level
+
     @APIRouter("/nvmeof/subsystem", Scope.NVME_OF)
     @APIDoc("NVMe-oF Subsystem Management API", "NVMe-oF Subsystem")
     class NVMeoFSubsystem(RESTController):
         @EndpointDoc("List all NVMeoF subsystems")
+        @NvmeofCLICommand("nvmeof subsystem list")
         @map_collection(model.Subsystem, pick="subsystems")
         @handle_nvmeof_error
         def list(self, gw_group: Optional[str] = None):
@@ -68,6 +147,7 @@ else:
                 "gw_group": Param(str, "NVMeoF gateway group", True, None),
             },
         )
+        @NvmeofCLICommand("nvmeof subsystem get")
         @map_model(model.Subsystem, first="subsystems")
         @handle_nvmeof_error
         def get(self, nqn: str, gw_group: Optional[str] = None):
@@ -84,6 +164,7 @@ else:
                 "gw_group": Param(str, "NVMeoF gateway group", True, None),
             },
         )
+        @NvmeofCLICommand("nvmeof subsystem add")
         @empty_response
         @handle_nvmeof_error
         def create(self, nqn: str, enable_ha: bool, max_namespaces: int = 1024,
@@ -98,10 +179,11 @@ else:
             "Delete an existing NVMeoF subsystem",
             parameters={
                 "nqn": Param(str, "NVMeoF subsystem NQN"),
-                "force": Param(bool, "Force delete", "false"),
+                "force": Param(bool, "Force delete", True, False),
                 "gw_group": Param(str, "NVMeoF gateway group", True, None),
             },
         )
+        @NvmeofCLICommand("nvmeof subsystem del")
         @empty_response
         @handle_nvmeof_error
         def delete(self, nqn: str, force: Optional[str] = "false", gw_group: Optional[str] = None):
@@ -121,6 +203,7 @@ else:
                 "gw_group": Param(str, "NVMeoF gateway group", True, None),
             },
         )
+        @NvmeofCLICommand("nvmeof listener list")
         @map_collection(model.Listener, pick="listeners")
         @handle_nvmeof_error
         def list(self, nqn: str, gw_group: Optional[str] = None):
@@ -139,6 +222,7 @@ else:
                 "gw_group": Param(str, "NVMeoF gateway group", True, None),
             },
         )
+        @NvmeofCLICommand("nvmeof listener add")
         @empty_response
         @handle_nvmeof_error
         def create(
@@ -171,6 +255,7 @@ else:
                 "gw_group": Param(str, "NVMeoF gateway group", True, None),
             },
         )
+        @NvmeofCLICommand("nvmeof listener del")
         @empty_response
         @handle_nvmeof_error
         def delete(
@@ -204,6 +289,7 @@ else:
                 "gw_group": Param(str, "NVMeoF gateway group", True, None),
             },
         )
+        @NvmeofCLICommand("nvmeof ns list")
         @map_collection(model.Namespace, pick="namespaces")
         @handle_nvmeof_error
         def list(self, nqn: str, gw_group: Optional[str] = None):
@@ -219,6 +305,7 @@ else:
                 "gw_group": Param(str, "NVMeoF gateway group", True, None),
             },
         )
+        @NvmeofCLICommand("nvmeof ns get")
         @map_model(model.Namespace, first="namespaces")
         @handle_nvmeof_error
         def get(self, nqn: str, nsid: str, gw_group: Optional[str] = None):
@@ -236,6 +323,7 @@ else:
                 "gw_group": Param(str, "NVMeoF gateway group", True, None),
             },
         )
+        @NvmeofCLICommand("nvmeof ns get_io_stats")
         @map_model(model.NamespaceIOStats)
         @handle_nvmeof_error
         def io_stats(self, nqn: str, nsid: str, gw_group: Optional[str] = None):
@@ -257,6 +345,7 @@ else:
                 "gw_group": Param(str, "NVMeoF gateway group", True, None),
             },
         )
+        @NvmeofCLICommand("nvmeof ns add")
         @map_model(model.NamespaceCreation)
         @handle_nvmeof_error
         def create(
@@ -296,6 +385,7 @@ else:
                 "gw_group": Param(str, "NVMeoF gateway group", True, None),
             },
         )
+        @NvmeofCLICommand("nvmeof ns update")
         @empty_response
         @handle_nvmeof_error
         def update(
@@ -360,6 +450,7 @@ else:
                 "gw_group": Param(str, "NVMeoF gateway group", True, None),
             },
         )
+        @NvmeofCLICommand("nvmeof ns del")
         @empty_response
         @handle_nvmeof_error
         def delete(self, nqn: str, nsid: str, gw_group: Optional[str] = None):
@@ -378,6 +469,7 @@ else:
                 "gw_group": Param(str, "NVMeoF gateway group", True, None),
             },
         )
+        @NvmeofCLICommand("nvmeof host list")
         @map_collection(
             model.Host,
             pick="hosts",
@@ -400,6 +492,7 @@ else:
                 "gw_group": Param(str, "NVMeoF gateway group", True, None),
             },
         )
+        @NvmeofCLICommand("nvmeof host add")
         @empty_response
         @handle_nvmeof_error
         def create(self, nqn: str, host_nqn: str, gw_group: Optional[str] = None):
@@ -415,6 +508,7 @@ else:
                 "gw_group": Param(str, "NVMeoF gateway group", True, None),
             },
         )
+        @NvmeofCLICommand("nvmeof host del")
         @empty_response
         @handle_nvmeof_error
         def delete(self, nqn: str, host_nqn: str, gw_group: Optional[str] = None):
@@ -432,6 +526,7 @@ else:
                 "gw_group": Param(str, "NVMeoF gateway group", True, None),
             },
         )
+        @NvmeofCLICommand("nvmeof connection list")
         @map_collection(model.Connection, pick="connections")
         @handle_nvmeof_error
         def list(self, nqn: str, gw_group: Optional[str] = None):
