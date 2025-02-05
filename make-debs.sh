@@ -72,6 +72,9 @@ fi
 if test $NPROC -gt 1 ; then
     j=-j${NPROC}
 fi
+
+j=-j10
+
 PATH=/usr/lib/ccache:$PATH dpkg-buildpackage $j -uc -us
 cd ../..
 mkdir -p $VERSION_CODENAME/conf
