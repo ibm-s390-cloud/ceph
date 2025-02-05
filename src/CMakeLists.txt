@@ -182,8 +182,7 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL GNU)
   if(NOT CMAKE_BUILD_TYPE STREQUAL Debug)
     if(HAS_FORTIFY_SOURCE)
       add_definitions(
-        -U_FORTIFY_SOURCE
-        -D_FORTIFY_SOURCE=2)
+        -U_FORTIFY_SOURCE)
     endif()
   endif()
     CHECK_C_COMPILER_FLAG(-fstack-protector-strong HAS_STACK_PROTECT)
