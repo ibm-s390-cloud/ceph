@@ -23,9 +23,15 @@ from ceph.deployment.service_spec import (
 )
 from ceph.deployment.utils import is_ipv6, unwrap_ipv6
 from mgr_util import build_url, merge_dicts
-from orchestrator import OrchestratorError, DaemonDescription, DaemonDescriptionStatus
+from orchestrator import (
+    OrchestratorError,
+    DaemonDescription,
+    DaemonDescriptionStatus,
+    HostSpec
+)
 from orchestrator._interface import daemon_type_to_service
 from cephadm import utils
+from .service_registry import register_cephadm_service
 
 if TYPE_CHECKING:
     from cephadm.module import CephadmOrchestrator
@@ -264,6 +270,12 @@ class CephadmService(metaclass=ABCMeta):
     @abstractmethod
     def TYPE(self) -> str:
         pass
+
+    @classmethod
+    def get_dependencies(cls, mgr: "CephadmOrchestrator",
+                         spec: Optional[ServiceSpec] = None,
+                         daemon_type: Optional[str] = None) -> List[str]:
+        return []
 
     def __init__(self, mgr: "CephadmOrchestrator"):
         self.mgr: "CephadmOrchestrator" = mgr
@@ -574,8 +586,12 @@ class CephadmService(metaclass=ABCMeta):
         """
         return False
 
+    def get_blocking_daemon_hosts(self, service_name: str) -> List[HostSpec]:
+        return []
+
 
 class CephService(CephadmService):
+
     def generate_config(self, daemon_spec: CephadmDaemonDeploySpec) -> Tuple[Dict[str, Any], List[str]]:
         # Ceph.daemons (mon, mgr, mds, osd, etc)
         cephadm_config = self.get_config_and_keyring(
@@ -638,6 +654,7 @@ class CephService(CephadmService):
         })
 
 
+@register_cephadm_service
 class MonService(CephService):
     TYPE = 'mon'
 
@@ -801,6 +818,7 @@ class MonService(CephService):
                     logger.error(f'Failed setting crush location for mon {dd.daemon_id}: {e}')
 
 
+@register_cephadm_service
 class MgrService(CephService):
     TYPE = 'mgr'
 
@@ -922,6 +940,7 @@ class MgrService(CephService):
         return HandleCommandResult(0, warn_message, '')
 
 
+@register_cephadm_service
 class MdsService(CephService):
     TYPE = 'mds'
 
@@ -978,11 +997,27 @@ class MdsService(CephService):
         })
 
 
+@register_cephadm_service
 class RgwService(CephService):
     TYPE = 'rgw'
 
     def allow_colo(self) -> bool:
         return True
+
+    @classmethod
+    def get_dependencies(cls, mgr: "CephadmOrchestrator",
+                         spec: Optional[ServiceSpec] = None,
+                         daemon_type: Optional[str] = None) -> List[str]:
+
+        deps = []
+        rgw_spec = cast(RGWSpec, spec)
+        ssl_cert = getattr(rgw_spec, 'rgw_frontend_ssl_certificate', None)
+        if ssl_cert:
+            if isinstance(ssl_cert, list):
+                ssl_cert = '\n'.join(ssl_cert)
+            deps.append(f'ssl-cert:{str(utils.md5_hash(ssl_cert))}')
+
+        return sorted(deps)
 
     def set_realm_zg_zone(self, spec: RGWSpec) -> None:
         assert self.TYPE == spec.service_type
@@ -1014,12 +1049,6 @@ class RgwService(CephService):
 
         # set rgw_realm rgw_zonegroup and rgw_zone, if present
         self.set_realm_zg_zone(spec)
-
-        if spec.generate_cert and not spec.rgw_frontend_ssl_certificate:
-            # generate a self-signed cert for the rgw service
-            cert, key = self.mgr.cert_mgr.ssl_certs.generate_root_cert(custom_san_list=spec.zonegroup_hostnames)
-            spec.rgw_frontend_ssl_certificate = ''.join([key, cert])
-            self.mgr.spec_store.save(spec)
 
         if spec.rgw_frontend_ssl_certificate:
             if isinstance(spec.rgw_frontend_ssl_certificate, list):
@@ -1066,11 +1095,40 @@ class RgwService(CephService):
             # this is a redeploy of older instance that doesn't have an explicitly
             # assigned port, in which case we can assume there is only 1 per host
             # and it matches the spec.
-            port = spec.get_port()
+            ports = spec.get_port()
+            if spec.ssl:
+                port = ports[1] if len(ports) > 1 else ports[0]
+            else:
+                port = ports[0]
+
+        if spec.generate_cert:
+            cert, key = self.mgr.cert_mgr.generate_cert(
+                daemon_spec.host,
+                self.mgr.inventory.get_addr(daemon_spec.host),
+                custom_san_list=spec.zonegroup_hostnames
+            )
+            pem = ''.join([key, cert])
+            self.mgr.cert_mgr.save_cert('rgw_frontend_ssl_cert', pem, service_name=spec.service_name())
+            ret, out, err = self.mgr.check_mon_command({
+                'prefix': 'config-key set',
+                'key': f'rgw/cert/{daemon_spec.name()}',
+                'val': pem,
+            })
 
         # configure frontend
         args = []
         ftype = spec.rgw_frontend_type or "beast"
+
+        # if an ssl_certificate arg was passed as part of rgw_frontend_extra_args
+        # then we shouldn't add it automatically else the rgw won't start
+        extra_ssl_cert_provided = any(
+            arg.startswith("ssl_certificate=")
+            for arg in (spec.rgw_frontend_extra_args or [])
+        )
+
+        if extra_ssl_cert_provided and spec.generate_cert:
+            raise OrchestratorError("Cannot provide ssl_certificate in combination with generate_cert")
+
         if ftype == 'beast':
             if spec.ssl:
                 if daemon_spec.ip:
@@ -1078,7 +1136,10 @@ class RgwService(CephService):
                         f"ssl_endpoint={build_url(host=daemon_spec.ip, port=port).lstrip('/')}")
                 else:
                     args.append(f"ssl_port={port}")
-                args.append(f"ssl_certificate=config://rgw/cert/{spec.service_name()}")
+                if spec.generate_cert:
+                    args.append(f"ssl_certificate=config://rgw/cert/{daemon_spec.name()}")
+                elif not extra_ssl_cert_provided:
+                    args.append(f"ssl_certificate=config://rgw/cert/{spec.service_name()}")
             else:
                 if daemon_spec.ip:
                     args.append(f"endpoint={build_url(host=daemon_spec.ip, port=port).lstrip('/')}")
@@ -1091,7 +1152,10 @@ class RgwService(CephService):
                     args.append(f"port={build_url(host=daemon_spec.ip, port=port).lstrip('/')}s")
                 else:
                     args.append(f"port={port}s")  # note the 's' suffix on port
-                args.append(f"ssl_certificate=config://rgw/cert/{spec.service_name()}")
+                if spec.generate_cert:
+                    args.append(f"ssl_certificate=config://rgw/cert/{daemon_spec.name()}")
+                elif not extra_ssl_cert_provided:
+                    args.append(f"ssl_certificate=config://rgw/cert/{spec.service_name()}")
             else:
                 if daemon_spec.ip:
                     args.append(f"port={build_url(host=daemon_spec.ip, port=port).lstrip('/')}")
@@ -1144,6 +1208,14 @@ class RgwService(CephService):
                 'value': str(spec.rgw_bucket_counters_cache_size),
             })
 
+        if getattr(spec, 'disable_multisite_sync_traffic', None) is not None:
+            ret, out, err = self.mgr.check_mon_command({
+                'prefix': 'config set',
+                'who': daemon_name,
+                'name': 'rgw_run_sync_thread',
+                'value': 'false' if spec.disable_multisite_sync_traffic else 'true',
+            })
+
         daemon_spec.keyring = keyring
         daemon_spec.final_config, daemon_spec.deps = self.generate_config(daemon_spec)
 
@@ -1179,6 +1251,10 @@ class RgwService(CephService):
             'prefix': 'config rm',
             'who': utils.name_to_config_section(daemon.name()),
             'name': 'rgw_frontends',
+        })
+        self.mgr.check_mon_command({
+            'prefix': 'config-key rm',
+            'key': f'rgw/cert/{daemon.name()}',
         })
 
     def ok_to_stop(
@@ -1219,7 +1295,14 @@ class RgwService(CephService):
     def config_dashboard(self, daemon_descrs: List[DaemonDescription]) -> None:
         self.mgr.trigger_connect_dashboard_rgw()
 
+    def generate_config(self, daemon_spec: CephadmDaemonDeploySpec) -> Tuple[Dict[str, Any], List[str]]:
+        svc_spec = cast(RGWSpec, self.mgr.spec_store[daemon_spec.service_name].spec)
+        config, parent_deps = super().generate_config(daemon_spec)
+        rgw_deps = parent_deps + self.get_dependencies(self.mgr, svc_spec)
+        return config, rgw_deps
 
+
+@register_cephadm_service
 class RbdMirrorService(CephService):
     TYPE = 'rbd-mirror'
 
@@ -1254,6 +1337,7 @@ class RbdMirrorService(CephService):
         return HandleCommandResult(0, warn_message, '')
 
 
+@register_cephadm_service
 class CrashService(CephService):
     TYPE = 'crash'
 
@@ -1272,9 +1356,19 @@ class CrashService(CephService):
         return daemon_spec
 
 
+@register_cephadm_service
 class CephExporterService(CephService):
     TYPE = 'ceph-exporter'
     DEFAULT_SERVICE_PORT = 9926
+
+    @classmethod
+    def get_dependencies(cls, mgr: "CephadmOrchestrator",
+                         spec: Optional[ServiceSpec] = None,
+                         daemon_type: Optional[str] = None) -> List[str]:
+
+        deps = [f'secure_monitoring_stack:{mgr.secure_monitoring_stack}']
+        deps += mgr.cache.get_daemons_by_types(['mgmt-gateway'])
+        return sorted(deps)
 
     def prepare_create(self, daemon_spec: CephadmDaemonDeploySpec) -> CephadmDaemonDeploySpec:
         assert self.TYPE == daemon_spec.daemon_type
@@ -1305,11 +1399,7 @@ class CephExporterService(CephService):
         daemon_spec.keyring = keyring
         daemon_spec.final_config, daemon_spec.deps = self.generate_config(daemon_spec)
         daemon_spec.final_config = merge_dicts(daemon_spec.final_config, exporter_config)
-
-        deps = []
-        deps += [d.name() for d in self.mgr.cache.get_daemons_by_service('mgmt-gateway')]
-        deps += [f'secure_monitoring_stack:{self.mgr.secure_monitoring_stack}']
-        daemon_spec.deps = deps
+        daemon_spec.deps = self.get_dependencies(self.mgr)
 
         return daemon_spec
 
@@ -1319,6 +1409,7 @@ class CephExporterService(CephService):
         return self.mgr.cert_mgr.generate_cert(host_fqdn, node_ip)
 
 
+@register_cephadm_service
 class CephfsMirrorService(CephService):
     TYPE = 'cephfs-mirror'
 
@@ -1351,12 +1442,28 @@ class CephfsMirrorService(CephService):
         return daemon_spec
 
 
+@register_cephadm_service
 class CephadmAgent(CephService):
     TYPE = 'agent'
+
+    @classmethod
+    def get_dependencies(cls, mgr: "CephadmOrchestrator",
+                         spec: Optional[ServiceSpec] = None,
+                         daemon_type: Optional[str] = None) -> List[str]:
+        agent = mgr.http_server.agent
+        return sorted(
+            [
+                str(mgr.get_mgr_ip()),
+                str(agent.server_port),
+                mgr.cert_mgr.get_root_ca(),
+                str(mgr.get_module_option("device_enhanced_scan")),
+            ]
+        )
 
     def prepare_create(self, daemon_spec: CephadmDaemonDeploySpec) -> CephadmDaemonDeploySpec:
         assert self.TYPE == daemon_spec.daemon_type
         daemon_id, host = daemon_spec.daemon_id, daemon_spec.host
+        daemon_spec.ports = [self.mgr.agent_starting_port]
 
         if not self.mgr.http_server.agent:
             raise OrchestratorError('Cannot deploy agent before creating cephadm endpoint')

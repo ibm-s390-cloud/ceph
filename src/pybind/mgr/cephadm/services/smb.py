@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Tuple, cast, Optional
 from mgr_module import HandleCommandResult
 
 from ceph.deployment.service_spec import ServiceSpec, SMBSpec
+from .service_registry import register_cephadm_service
 
 from orchestrator import DaemonDescription
 from .cephadmservice import (
@@ -17,6 +18,7 @@ from .cephadmservice import (
 logger = logging.getLogger(__name__)
 
 
+@register_cephadm_service
 class SMBService(CephService):
     TYPE = 'smb'
     DEFAULT_EXPORTER_PORT = 9922
@@ -31,15 +33,37 @@ class SMBService(CephService):
         smb_spec = cast(SMBSpec, spec)
         return 'clustered' in smb_spec.features
 
+    def fence(self, daemon_id: str) -> None:
+        logger.info(f'Fencing old smb.{daemon_id}')
+        ret, out, err = self.mgr.mon_command({
+            'prefix': 'auth rm',
+            'entity': f'client.smb.fs.cluster.{daemon_id}',
+        })
+
     def fence_old_ranks(
         self,
         spec: ServiceSpec,
         rank_map: Dict[int, Dict[int, Optional[str]]],
         num_ranks: int,
     ) -> None:
-        logger.warning(
-            'fence_old_ranks: Unsupported %r %r', rank_map, num_ranks
-        )
+        smb_spec = cast(SMBSpec, spec)
+        for rank, m in list(rank_map.items()):
+            if rank >= num_ranks:
+                for daemon_id in m.values():
+                    if daemon_id is not None:
+                        logger.info(f'Fencing old smb.{smb_spec.cluster_id}')
+                        self.fence(smb_spec.cluster_id)
+                del rank_map[rank]
+                self.mgr.spec_store.save_rank_map(spec.service_name(), rank_map)
+            else:
+                max_gen = max(m.keys())
+                for gen, daemon_id in list(m.items()):
+                    if gen < max_gen:
+                        if daemon_id is not None:
+                            logger.info(f'Fencing old smb.{smb_spec.cluster_id}')
+                            self.fence(smb_spec.cluster_id)
+                        del rank_map[rank][gen]
+                        self.mgr.spec_store.save_rank_map(spec.service_name(), rank_map)
 
     def prepare_create(
         self, daemon_spec: CephadmDaemonDeploySpec
@@ -87,6 +111,10 @@ class SMBService(CephService):
             self.mgr.container_image_samba_metrics
         )
         config_blobs['metrics_port'] = SMBService.DEFAULT_EXPORTER_PORT
+        if 'cephfs-proxy' in smb_spec.features:
+            config_blobs['proxy_image'] = self.mgr.get_container_image(
+                '', force_ceph_image=True
+            )
 
         logger.debug('smb generate_config: %r', config_blobs)
         self._configure_cluster_meta(smb_spec, daemon_spec)

@@ -15,6 +15,7 @@ import boto
 import boto.s3.connection
 from boto.s3.website import WebsiteConfiguration
 from boto.s3.cors import CORSConfiguration
+from botocore.exceptions import ClientError
 
 from nose.tools import eq_ as eq
 from nose.tools import assert_not_equal, assert_equal, assert_true, assert_false
@@ -41,12 +42,18 @@ class Config:
 # implementations of these interfaces by calling init_multi()
 realm = None
 user = None
+non_account_user = None
+non_account_alt_user = None
 config = None
-def init_multi(_realm, _user, _config=None):
+def init_multi(_realm, _user, _non_account_user, _non_account_alt_user, _config=None):
     global realm
     realm = _realm
     global user
     user = _user
+    global non_account_user
+    non_account_user = _non_account_user
+    global non_account_alt_user
+    non_account_alt_user = _non_account_alt_user
     global config
     config = _config or Config()
     realm_meta_checkpoint(realm)
@@ -467,17 +474,31 @@ class ZonegroupConns:
     def __init__(self, zonegroup):
         self.zonegroup = zonegroup
         self.zones = []
+        self.non_account_zones = []
+        self.non_account_alt_zones = []
         self.ro_zones = []
+        self.non_account_ro_zones = []
+        self.non_account_alt_ro_zones = []
         self.rw_zones = []
+        self.non_account_rw_zones = []
+        self.non_account_alt_rw_zones = []
         self.master_zone = None
 
         for z in zonegroup.zones:
             zone_conn = z.get_conn(user.credentials)
+            non_account_zone_conn = z.get_conn(non_account_user.credentials)
+            non_account_alt_zone_conn = z.get_conn(non_account_alt_user.credentials)
             self.zones.append(zone_conn)
+            self.non_account_zones.append(non_account_zone_conn)
+            self.non_account_alt_zones.append(non_account_alt_zone_conn)
             if z.is_read_only():
                 self.ro_zones.append(zone_conn)
+                self.non_account_ro_zones.append(non_account_zone_conn)
+                self.non_account_alt_ro_zones.append(non_account_alt_zone_conn)
             else:
                 self.rw_zones.append(zone_conn)
+                self.non_account_rw_zones.append(non_account_zone_conn)
+                self.non_account_alt_rw_zones.append(non_account_alt_zone_conn)
 
             if z == zonegroup.master_zone:
                 self.master_zone = zone_conn
@@ -573,6 +594,7 @@ def create_bucket_per_zone_in_realm():
         b, z = create_bucket_per_zone(zg_conn)
         buckets.extend(b)
         zone_bucket.extend(z)
+    realm_meta_checkpoint(realm)
     return buckets, zone_bucket
 
 def test_bucket_create():
@@ -583,6 +605,50 @@ def test_bucket_create():
 
     for zone in zonegroup_conns.zones:
         assert check_all_buckets_exist(zone, buckets)
+
+def test_bucket_create_with_tenant():
+
+    ''' create a bucket from secondary zone under tenant namespace. check if it successfully syncs
+        under the same namespace'''
+
+    zonegroup = realm.master_zonegroup()
+    zonegroup_conns = ZonegroupConns(zonegroup)
+    primary = zonegroup_conns.rw_zones[0]
+    secondary = zonegroup_conns.rw_zones[1]
+
+    access_key = 'abcd'
+    secret_key = 'efgh'
+    tenant = 'testx'
+    uid = 'test'
+
+    tenant_secondary_conn = boto.s3.connection.S3Connection(aws_access_key_id=access_key,
+                                aws_secret_access_key=secret_key,
+                                is_secure=False,
+                                port=secondary.zone.gateways[0].port,
+                                host=secondary.zone.gateways[0].host,
+                                calling_format='boto.s3.connection.OrdinaryCallingFormat')
+
+    tenant_primary_conn = boto.s3.connection.S3Connection(aws_access_key_id=access_key,
+                                aws_secret_access_key=secret_key,
+                                is_secure=False,
+                                port=primary.zone.gateways[0].port,
+                                host=primary.zone.gateways[0].host,
+                                calling_format='boto.s3.connection.OrdinaryCallingFormat')
+
+    cmd = ['user', 'create', '--tenant', tenant, '--uid', uid, '--access-key', access_key, '--secret-key', secret_key, '--display-name', 'tenanted-user']
+    primary.zone.cluster.admin(cmd)
+    zonegroup_meta_checkpoint(zonegroup)
+    try:
+        bucket = tenant_secondary_conn.create_bucket('tenanted-bucket')
+        zonegroup_meta_checkpoint(zonegroup)
+        assert tenant_primary_conn.get_bucket(bucket.name)
+        log.info("bucket exists in tenant namespace")
+        e = assert_raises(boto.exception.S3ResponseError, primary.get_bucket, bucket.name)
+        assert e.error_code == 'NoSuchBucket'
+        log.info("bucket does not exist in default user namespace")
+    finally:
+        cmd = ['user', 'rm', '--tenant', tenant, '--uid', uid, '--purge-data']
+        primary.zone.cluster.admin(cmd)
 
 def test_bucket_recreate():
     zonegroup = realm.master_zonegroup()
@@ -1211,6 +1277,9 @@ def test_datalog_autotrim():
 
     # wait for metadata and data sync to catch up
     zonegroup_meta_checkpoint(zonegroup)
+    zonegroup_data_checkpoint(zonegroup_conns)
+    zonegroup_bucket_checkpoint(zonegroup_conns, bucket.name)
+    time.sleep(config.checkpoint_delay)
     zonegroup_data_checkpoint(zonegroup_conns)
 
     # trim each datalog
@@ -3634,4 +3703,185 @@ def test_copy_object_different_bucket():
         CopySource = source_bucket.name + '/' + objname)
     
     zonegroup_bucket_checkpoint(zonegroup_conns, dest_bucket.name)
+
+def test_bucket_create_location_constraint():
+    for zonegroup in realm.current_period.zonegroups:
+        zonegroup_conns = ZonegroupConns(zonegroup)
+        for zg in realm.current_period.zonegroups:
+            z = zonegroup_conns.rw_zones[0]
+            bucket_name = gen_bucket_name()
+            if zg.name == zonegroup.name:
+                # my zonegroup should pass
+                z.s3_client.create_bucket(Bucket=bucket_name, CreateBucketConfiguration={'LocationConstraint': zg.name})
+                # check bucket location
+                response = z.s3_client.get_bucket_location(Bucket=bucket_name)
+                assert_equal(response['LocationConstraint'], zg.name)
+            else:
+                # other zonegroup should fail with 400
+                e = assert_raises(ClientError,
+                                  z.s3_client.create_bucket,
+                                    Bucket=bucket_name,
+                                    CreateBucketConfiguration={'LocationConstraint': zg.name})
+                assert e.response['ResponseMetadata']['HTTPStatusCode'] == 400
+
+def allow_bucket_replication(function):
+    def wrapper(*args, **kwargs):
+        zonegroup = realm.master_zonegroup()
+        if len(zonegroup.zones) < 2:
+            raise SkipTest("More than one zone needed in any one or multiple zone(s).")
+        
+        zones = ",".join([z.name for z in zonegroup.zones])
+        z = zonegroup.zones[0]
+        c = z.cluster
+
+        create_sync_policy_group(c, "sync-group")
+        create_sync_group_flow_symmetrical(c, "sync-group", "sync-flow", zones)
+        create_sync_group_pipe(c, "sync-group", "sync-pipe", zones, zones)
+
+        zonegroup.period.update(z, commit=True)
+        realm_meta_checkpoint(realm)
+
+        try:
+            function(*args, **kwargs)
+        finally:
+            remove_sync_group_pipe(c, "sync-group", "sync-pipe")
+            remove_sync_group_flow_symmetrical(c, "sync-group", "sync-flow")
+            remove_sync_policy_group(c, "sync-group")
+
+            zonegroup.period.update(z, commit=True)
+            realm_meta_checkpoint(realm)
+
+    return wrapper
+
+@allow_bucket_replication
+def test_bucket_replication_normal():
+    zonegroup = realm.master_zonegroup()
+    zonegroup_conns = ZonegroupConns(zonegroup)
     
+    source = zonegroup_conns.non_account_rw_zones[0]
+    dest = zonegroup_conns.non_account_rw_zones[1]
+
+    source_bucket = source.create_bucket(gen_bucket_name())
+    dest_bucket = dest.create_bucket(gen_bucket_name())
+    zonegroup_meta_checkpoint(zonegroup)
+
+    # create replication configuration
+    response = source.s3_client.put_bucket_replication(
+        Bucket=source_bucket.name,
+        ReplicationConfiguration={
+            'Role': '',
+            'Rules': [{
+                'ID': 'rule1',
+                'Status': 'Enabled',
+                'Destination': {
+                    'Bucket': f'arn:aws:s3:::{dest_bucket.name}',
+                }
+            }]
+        }
+    )
+    assert response['ResponseMetadata']['HTTPStatusCode'] == 200
+    zonegroup_meta_checkpoint(zonegroup)
+
+    # upload an object and wait for sync.
+    objname = 'dummy'
+    k = new_key(source, source_bucket, objname)
+    k.set_contents_from_string('foo')
+    zone_data_checkpoint(dest.zone, source.zone)
+
+    # check that object exists in destination bucket
+    k = get_key(dest, dest_bucket, objname)
+    assert_equal(k.get_contents_as_string().decode('utf-8'), 'foo')
+
+@allow_bucket_replication
+def test_bucket_replication_alt_user_forbidden():
+    zonegroup = realm.master_zonegroup()
+    zonegroup_conns = ZonegroupConns(zonegroup)
+
+    source = zonegroup_conns.non_account_rw_zones[0]
+    dest = zonegroup_conns.non_account_alt_rw_zones[1]
+
+    source_bucket = source.create_bucket(gen_bucket_name())
+    dest_bucket = dest.create_bucket(gen_bucket_name())
+    zonegroup_meta_checkpoint(zonegroup)
+
+    # create replication configuration
+    response = source.s3_client.put_bucket_replication(
+        Bucket=source_bucket.name,
+        ReplicationConfiguration={
+            'Role': '',
+            'Rules': [{
+                'ID': 'rule1',
+                'Status': 'Enabled',
+                'Destination': {
+                    'Bucket': f'arn:aws:s3:::{dest_bucket.name}',
+                }
+            }]
+        }
+    )
+    assert response['ResponseMetadata']['HTTPStatusCode'] == 200
+    zonegroup_meta_checkpoint(zonegroup)
+
+    # upload an object and wait for sync.
+    objname = 'dummy'
+    k = new_key(source, source_bucket, objname)
+    k.set_contents_from_string('foo')
+    zone_data_checkpoint(dest.zone, source.zone)
+
+    # check that object does not exist in destination bucket
+    e = assert_raises(ClientError, dest.s3_client.get_object, Bucket=dest_bucket.name, Key=objname)
+    assert e.response['Error']['Code'] == 'NoSuchKey'
+
+@allow_bucket_replication
+def test_bucket_replication_alt_user():
+    zonegroup = realm.master_zonegroup()
+    zonegroup_conns = ZonegroupConns(zonegroup)
+
+    source = zonegroup_conns.non_account_rw_zones[0]
+    dest = zonegroup_conns.non_account_alt_rw_zones[1]
+
+    source_bucket = source.create_bucket(gen_bucket_name())
+    dest_bucket = dest.create_bucket(gen_bucket_name())
+    zonegroup_meta_checkpoint(zonegroup)
+
+    # create replication configuration
+    response = source.s3_client.put_bucket_replication(
+        Bucket=source_bucket.name,
+        ReplicationConfiguration={
+            'Role': '',
+            'Rules': [{
+                'ID': 'rule1',
+                'Status': 'Enabled',
+                'Destination': {
+                    'Bucket': f'arn:aws:s3:::{dest_bucket.name}',
+                    'AccessControlTranslation': {
+                        'Owner': non_account_alt_user.id,
+                    },
+                }
+            }]
+        }
+    )
+    assert response['ResponseMetadata']['HTTPStatusCode'] == 200
+    # give access to user to write to alt user's bucket
+    dest.s3_client.put_bucket_policy(
+        Bucket=dest_bucket.name,
+        Policy=json.dumps({
+            'Version': '2012-10-17',
+            'Statement': [{
+                'Effect': 'Allow',
+                'Principal': {'AWS': [f"arn:aws:iam:::user/{user.id}"]},
+                'Action': 's3:PutObject',
+                'Resource': f'arn:aws:s3:::{dest_bucket.name}/*',
+            }]
+        })
+    )
+    zonegroup_meta_checkpoint(zonegroup)
+
+    # upload an object and wait for sync.
+    objname = 'dummy'
+    k = new_key(source, source_bucket, objname)
+    k.set_contents_from_string('foo')
+    zone_data_checkpoint(dest.zone, source.zone)
+
+    # check that object exists in destination bucket
+    k = get_key(dest, dest_bucket, objname)
+    assert_equal(k.get_contents_as_string().decode('utf-8'), 'foo')

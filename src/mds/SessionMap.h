@@ -16,8 +16,7 @@
 #define CEPH_MDS_SESSIONMAP_H
 
 #include <set>
-
-#include "include/unordered_map.h"
+#include <unordered_map>
 
 #include "include/Context.h"
 #include "include/xlist.h"
@@ -417,6 +416,10 @@ public:
   session_info_t info;                         ///< durable bits
   MDSAuthCaps auth_caps;
 
+  // True if the session is opened by the client.
+  // False if the session is forced to open, until it is opened again by the client.
+  bool client_opened = false;
+
   xlist<Session*>::item item_session_list;
 
   std::list<ceph::ref_t<Message>> preopen_out_queue;  ///< messages for client, queued before they connect
@@ -583,7 +586,7 @@ public:
 
 protected:
   version_t version = 0;
-  ceph::unordered_map<entity_name_t, Session*> session_map;
+  std::unordered_map<entity_name_t, Session*> session_map;
   PerfCounters *logger =nullptr;
 
   // total request load avg
@@ -669,7 +672,7 @@ public:
 	    session_map_entry-> second : nullptr);
   }
   const Session* get_session(entity_name_t w) const {
-    ceph::unordered_map<entity_name_t, Session*>::const_iterator p = session_map.find(w);
+    auto p = session_map.find(w);
     if (p == session_map.end()) {
       return NULL;
     } else {

@@ -11,11 +11,13 @@
 
 #include "common/Cond.h"
 #include "common/Finisher.h"
+#include "common/snap_types.h" // for class SnapContext
 #include "common/Thread.h"
 #include "common/zipkin_trace.h"
 
-#include "Objecter.h"
 #include "Striper.h"
+
+#include <unordered_map>
 
 class WritebackHandler;
 
@@ -418,7 +420,7 @@ class ObjectCacher {
   void *flush_set_callback_arg;
 
   // indexed by pool_id
-  std::vector<ceph::unordered_map<sobject_t, Object*> > objects;
+  std::vector<std::unordered_map<sobject_t, Object*>> objects;
 
   std::list<Context*> waitfor_read;
 

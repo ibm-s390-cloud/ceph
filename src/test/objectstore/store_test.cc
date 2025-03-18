@@ -39,12 +39,12 @@
 #include "global/global_init.h"
 #include "common/ceph_mutex.h"
 #include "common/Cond.h"
+#include "common/debug.h"
 #include "common/errno.h"
 #include "common/options.h" // for the size literals
 #include "common/pretty_binary.h"
 #include "include/stringify.h"
 #include "include/coredumpctl.h"
-#include "include/unordered_map.h"
 #include "os/kv.h"
 #include "store_test_fixture.h"
 
@@ -199,6 +199,7 @@ protected:
   }
 };
 
+#ifdef WITH_BLUESTORE
 
 class MultiLabelTest : public StoreTestDeferredSetup {
   public:
@@ -239,13 +240,7 @@ class MultiLabelTest : public StoreTestDeferredSetup {
   }
   bool read_bdev_label(bluestore_bdev_label_t* label, uint64_t position) {
     string bdev_path = get_data_dir() + "/block";
-    unique_ptr<BlockDevice> bdev(BlockDevice::create(
-      g_ceph_context, bdev_path, nullptr, nullptr, nullptr, nullptr));
-    int r = bdev->open(bdev_path);
-    if (r < 0)
-      return r;
-    r = BlueStore::debug_read_bdev_label(g_ceph_context, bdev.get(), bdev_path, label, position);
-    bdev->close();
+    int r = BlueStore::read_bdev_label_at_pos(g_ceph_context, bdev_path, position, label);
     return r;
   }
   bool write_bdev_label(const bluestore_bdev_label_t& label, uint64_t position) {
@@ -273,6 +268,8 @@ class MultiLabelTest : public StoreTestDeferredSetup {
     StoreTest::TearDown();
   }
 };
+
+#endif // WITH_BLUESTORE
 
 class StoreTestSpecificAUSize : public StoreTestDeferredSetup {
 
@@ -1347,12 +1344,15 @@ void StoreTest::doCompressionTest()
   EXPECT_EQ(store->mount(), 0);
   ch = store->open_collection(cid);
   {
+    C_SaferCond c;
     ObjectStore::Transaction t;
     t.remove(cid, hoid);
     t.remove_collection(cid);
     cerr << "Cleaning" << std::endl;
+    t.register_on_commit(&c);
     r = queue_transaction(store, ch, std::move(t));
     ASSERT_EQ(r, 0);
+      c.wait();
   }
 }
 
@@ -7198,13 +7198,14 @@ INSTANTIATE_TEST_SUITE_P(
   StoreTestDeferredSetup,
   ::testing::Values(
     "bluestore"));
-#endif
 
 INSTANTIATE_TEST_SUITE_P(
   ObjectStore,
   MultiLabelTest,
   ::testing::Values(
     "bluestore"));
+
+#endif // WITH_BLUESTORE
 
 struct deferred_test_t {
   uint32_t bdev_block_size;
@@ -7218,6 +7219,8 @@ void PrintTo(const deferred_test_t& t, ::std::ostream* os)
   *os << t.bdev_block_size << "/" << t.min_alloc_size << "/"
       << t.max_blob_size << "/" << t.prefer_deferred_size;
 }
+
+#ifdef WITH_BLUESTORE
 
 class DeferredWriteTest : public StoreTestFixture,
 		          public ::testing::WithParamInterface<deferred_test_t> {
@@ -7309,7 +7312,6 @@ TEST_P(DeferredWriteTest, NewData) {
   }
 }
 
-#if defined(WITH_BLUESTORE)
 INSTANTIATE_TEST_SUITE_P(
   BlueStore,
   DeferredWriteTest,
@@ -10970,6 +10972,8 @@ TEST_P(StoreTest, mergeRegionTest) {
   }
 }
 
+#ifdef WITH_BLUESTORE
+
 TEST_P(MultiLabelTest, MultiSelectableOff) {
   SetVal(g_conf(), "bluestore_bdev_label_multi", "false");
   g_conf().apply_changes(nullptr);
@@ -11291,6 +11295,8 @@ TEST_P(MultiLabelTest, UpgradeToMultiLabelCollisionWithObjects) {
   ASSERT_NE(it, label.meta.end());
   ASSERT_EQ(label.meta["multi"], "yes");
 }
+
+#endif // WITH_BLUESTORE
 
 TEST_P(StoreTestSpecificAUSize, BluestoreEnforceHWSettingsHdd) {
   if (string(GetParam()) != "bluestore")

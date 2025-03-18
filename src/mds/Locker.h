@@ -15,21 +15,22 @@
 #ifndef CEPH_MDS_LOCKER_H
 #define CEPH_MDS_LOCKER_H
 
+#include "common/ref.h"
 #include "include/types.h"
 
-#include "messages/MClientCaps.h"
-#include "messages/MClientCapRelease.h"
-#include "messages/MClientLease.h"
-#include "messages/MLock.h"
-
 #include "CInode.h"
-#include "SimpleLock.h"
 #include "MDSContext.h"
 #include "Mutation.h"
-#include "messages/MClientReply.h"
 
+struct LeaseStat;
 struct SnapRealm;
 
+class MClientCaps;
+class MClientCapRelease;
+class MClientLease;
+class MClientReply;
+class MDCache;
+class MLock;
 class MDSRank;
 class Session;
 class CDentry;
@@ -194,7 +195,7 @@ public:
 
   void issue_client_lease(CDentry *dn, CInode *in, const MDRequestRef &mdr, utime_t now, bufferlist &bl);
   void revoke_client_leases(SimpleLock *lock);
-  static void encode_lease(bufferlist& bl, const session_info_t& info, const LeaseStat& ls);
+  void encode_lease(bufferlist& bl, const session_info_t& info, const LeaseStat& ls);
 
 protected:
   void send_lock_message(SimpleLock *lock, int msg);

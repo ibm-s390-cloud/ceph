@@ -25,6 +25,8 @@ class PGBackend;
 
 class PGRecovery : public crimson::osd::BackfillState::BackfillListener {
 public:
+  using interruptor =
+    crimson::interruptible::interruptor<crimson::osd::IOInterruptCondition>;
   template <typename T = void>
   using interruptible_future = RecoveryBackend::interruptible_future<T>;
   PGRecovery(PGRecoveryListener* pg) : pg(pg) {}
@@ -45,6 +47,10 @@ public:
 
   seastar::future<> stop() { return seastar::now(); }
   void on_pg_clean();
+  void enqueue_push(
+    const hobject_t& obj,
+    const eversion_t& v,
+    const std::vector<pg_shard_t> &peers) final;
 private:
   PGRecoveryListener* pg;
   size_t start_primary_recovery_ops(
@@ -101,17 +107,13 @@ private:
   template <class EventT>
   void start_backfill_recovery(
     const EventT& evt);
-  void backfill_cancelled();
+  void backfill_suspended();
   void request_replica_scan(
     const pg_shard_t& target,
     const hobject_t& begin,
     const hobject_t& end) final;
   void request_primary_scan(
     const hobject_t& begin) final;
-  void enqueue_push(
-    const hobject_t& obj,
-    const eversion_t& v,
-    const std::vector<pg_shard_t> &peers) final;
   void enqueue_drop(
     const pg_shard_t& target,
     const hobject_t& obj,

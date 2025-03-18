@@ -28,10 +28,13 @@
 #include "os/kv.h"
 #include "include/compat.h"
 #include "include/stringify.h"
+#include "common/debug.h"
 #include "common/errno.h"
 #include "common/safe_io.h"
 #include "common/Formatter.h"
 #include "common/pretty_binary.h"
+
+#include <shared_mutex> // for std::shared_lock
 
 #define dout_context cct
 #define dout_subsys ceph_subsys_kstore
@@ -409,7 +412,7 @@ KStore::OnodeRef KStore::OnodeHashLRU::lookup(const ghobject_t& oid)
 {
   std::lock_guard<std::mutex> l(lock);
   dout(30) << __func__ << dendl;
-  ceph::unordered_map<ghobject_t,OnodeRef>::iterator p = onode_map.find(oid);
+  auto p = onode_map.find(oid);
   if (p == onode_map.end()) {
     dout(30) << __func__ << " " << oid << " miss" << dendl;
     return OnodeRef();
@@ -432,9 +435,8 @@ void KStore::OnodeHashLRU::rename(const ghobject_t& old_oid,
 {
   std::lock_guard<std::mutex> l(lock);
   dout(30) << __func__ << " " << old_oid << " -> " << new_oid << dendl;
-  ceph::unordered_map<ghobject_t,OnodeRef>::iterator po, pn;
-  po = onode_map.find(old_oid);
-  pn = onode_map.find(new_oid);
+  auto po = onode_map.find(old_oid);
+  auto pn = onode_map.find(new_oid);
 
   ceph_assert(po != onode_map.end());
   if (pn != onode_map.end()) {
@@ -466,14 +468,14 @@ bool KStore::OnodeHashLRU::get_next(
     if (lru.empty()) {
       return false;
     }
-    ceph::unordered_map<ghobject_t,OnodeRef>::iterator p = onode_map.begin();
+    auto p = onode_map.begin();
     ceph_assert(p != onode_map.end());
     next->first = p->first;
     next->second = p->second;
     return true;
   }
 
-  ceph::unordered_map<ghobject_t,OnodeRef>::iterator p = onode_map.find(after);
+  auto p = onode_map.find(after);
   ceph_assert(p != onode_map.end()); // for now
   lru_list_t::iterator pi = lru.iterator_to(*p->second);
   ++pi;
@@ -1090,7 +1092,7 @@ int KStore::pool_statfs(uint64_t pool_id, struct store_statfs_t *buf,
 KStore::CollectionRef KStore::_get_collection(coll_t cid)
 {
   std::shared_lock l{coll_lock};
-  ceph::unordered_map<coll_t,CollectionRef>::iterator cp = coll_map.find(cid);
+  auto cp = coll_map.find(cid);
   if (cp == coll_map.end())
     return CollectionRef();
   return cp->second;
@@ -1386,9 +1388,7 @@ int KStore::getattrs(
 int KStore::list_collections(vector<coll_t>& ls)
 {
   std::shared_lock l{coll_lock};
-  for (ceph::unordered_map<coll_t, CollectionRef>::iterator p = coll_map.begin();
-       p != coll_map.end();
-       ++p)
+  for (auto p = coll_map.begin(); p != coll_map.end(); ++p)
     ls.push_back(p->first);
   return 0;
 }
@@ -1651,6 +1651,13 @@ bufferlist KStore::OmapIteratorImpl::value()
   return it->value();
 }
 
+std::string_view KStore::OmapIteratorImpl::value_as_sv()
+{
+  std::shared_lock l{c->lock};
+  ceph_assert(it->valid());
+  return it->value_as_sv();
+}
+
 int KStore::omap_get(
   CollectionHandle& ch,                ///< [in] Collection containing oid
   const ghobject_t &oid,   ///< [in] Object containing omap
@@ -1864,6 +1871,71 @@ ObjectMap::ObjectMapIterator KStore::get_omap_iterator(
   dout(10) << __func__ << " header = " << o->onode.omap_head <<dendl;
   KeyValueDB::Iterator it = db->get_iterator(PREFIX_OMAP);
   return ObjectMap::ObjectMapIterator(new OmapIteratorImpl(c, o, it));
+}
+
+int KStore::omap_iterate(
+  CollectionHandle &ch,   ///< [in] collection
+  const ghobject_t &oid, ///< [in] object
+  ObjectStore::omap_iter_seek_t start_from, ///< [in] where the iterator should point to at the beginning
+  std::function<omap_iter_ret_t(std::string_view, std::string_view)> f)
+{
+  dout(10) << __func__ << " " << ch->cid << " " << oid << dendl;
+  Collection *c = static_cast<Collection*>(ch.get());
+  {
+    std::shared_lock l{c->lock};
+
+    OnodeRef o = c->get_onode(oid, false);
+    if (!o || !o->exists) {
+      dout(10) << __func__ << " " << oid << "doesn't exist" <<dendl;
+      return -ENOENT;
+    }
+    o->flush();
+    dout(10) << __func__ << " header = " << o->onode.omap_head <<dendl;
+
+    KeyValueDB::Iterator it = db->get_iterator(PREFIX_OMAP);
+    std::string tail;
+    std::string seek_key;
+    if (o->onode.omap_head) {
+      return 0; // nothing to do
+    }
+
+    // acquire data depedencies for seek & iterate
+    get_omap_key(o->onode.omap_head, start_from.seek_position, &seek_key);
+    get_omap_tail(o->onode.omap_head, &tail);
+
+    // acquire the iterator
+    {
+      it = db->get_iterator(PREFIX_OMAP);
+    }
+
+    // seek the iterator
+    {
+      if (start_from.seek_type == omap_iter_seek_t::LOWER_BOUND) {
+        it->lower_bound(seek_key);
+      } else {
+        it->upper_bound(seek_key);
+      }
+    }
+
+    // iterate!
+    while (it->valid()) {
+      std::string user_key;
+      if (const auto& db_key = it->raw_key().second; db_key >= tail) {
+        break;
+      } else {
+        decode_omap_key(db_key, &user_key);
+      }
+      omap_iter_ret_t ret = f(user_key, it->value_as_sv());
+      if (ret == omap_iter_ret_t::STOP) {
+        break;
+      } else if (ret == omap_iter_ret_t::NEXT) {
+        it->next();
+      } else {
+        ceph_abort();
+      }
+    }
+  }
+  return 0;
 }
 
 

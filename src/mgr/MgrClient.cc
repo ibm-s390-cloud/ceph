@@ -14,6 +14,7 @@
 
 #include "MgrClient.h"
 
+#include "common/perf_counters_collection.h"
 #include "common/perf_counters_key.h"
 #include "mgr/MgrContext.h"
 #include "mon/MonMap.h"
@@ -97,7 +98,7 @@ void MgrClient::shutdown()
   }
 }
 
-bool MgrClient::ms_dispatch2(const ref_t<Message>& m)
+Dispatcher::dispatch_result_t MgrClient::ms_dispatch2(const ref_t<Message>& m)
 {
   std::lock_guard l(lock);
 

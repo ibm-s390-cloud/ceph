@@ -15,14 +15,19 @@
 #ifndef CEPH_MON_TYPES_H
 #define CEPH_MON_TYPES_H
 
+#include <iomanip>
+#include <list>
 #include <map>
+#include <sstream>
+#include <string>
 
-#include "include/Context.h"
+#include "include/ceph_features.h" // for CEPH_FEATURE_*
 #include "include/util.h"
 #include "include/utime.h"
 #include "common/Formatter.h"
 #include "common/bit_str.h"
 #include "common/ceph_releases.h"
+#include "msg/msg_types.h" // for entity_addrvec_t
 
 // use as paxos_service index
 enum {
@@ -517,6 +522,7 @@ namespace ceph {
       constexpr mon_feature_t FEATURE_QUINCY(     (1ULL << 8));
       constexpr mon_feature_t FEATURE_REEF(       (1ULL << 9));
       constexpr mon_feature_t FEATURE_SQUID(      (1ULL << 10));
+      constexpr mon_feature_t FEATURE_TENTACLE(   (1ULL << 11));
 
       constexpr mon_feature_t FEATURE_RESERVED(   (1ULL << 63));
       constexpr mon_feature_t FEATURE_NONE(       (0ULL));
@@ -539,6 +545,7 @@ namespace ceph {
 	  FEATURE_QUINCY |
 	  FEATURE_REEF |
 	  FEATURE_SQUID |
+	  FEATURE_TENTACLE |
 	  FEATURE_NONE
 	  );
       }
@@ -565,6 +572,7 @@ namespace ceph {
 	  FEATURE_QUINCY |
 	  FEATURE_REEF |
 	  FEATURE_SQUID |
+	  FEATURE_TENTACLE |
 	  FEATURE_NONE
 	  );
       }
@@ -583,6 +591,9 @@ namespace ceph {
 
 static inline ceph_release_t infer_ceph_release_from_mon_features(mon_feature_t f)
 {
+  if (f.contains_all(ceph::features::mon::FEATURE_TENTACLE)) {
+    return ceph_release_t::tentacle;
+  }
   if (f.contains_all(ceph::features::mon::FEATURE_SQUID)) {
     return ceph_release_t::squid;
   }
@@ -638,6 +649,8 @@ static inline const char *ceph::features::mon::get_feature_name(uint64_t b) {
     return "reef";
   } else if (f == FEATURE_SQUID) {
     return "squid";
+  } else if (f == FEATURE_TENTACLE) {
+    return "tentacle";
   } else if (f == FEATURE_RESERVED) {
     return "reserved";
   }
@@ -668,6 +681,8 @@ inline mon_feature_t ceph::features::mon::get_feature_by_name(const std::string 
     return FEATURE_REEF;
   } else if (n == "squid") {
     return FEATURE_SQUID;
+  } else if (n == "tentacle") {
+    return FEATURE_TENTACLE;
   } else if (n == "reserved") {
     return FEATURE_RESERVED;
   }

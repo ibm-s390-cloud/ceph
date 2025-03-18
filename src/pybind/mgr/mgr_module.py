@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     else:
         from typing_extensions import Literal
 
+import cephfs
 import inspect
 import logging
 import errno
@@ -1108,6 +1109,8 @@ class MgrModule(ceph_module.BaseMgrModule, MgrModuleLoggingMixin):
         # Keep a librados instance for those that need it.
         self._rados: Optional[rados.Rados] = None
 
+        self._cephfs: Optional[cephfs.LibCephFS] = None
+
         # this does not change over the lifetime of an active mgr
         self._mgr_ips: Optional[str] = None
 
@@ -1285,7 +1288,7 @@ class MgrModule(ceph_module.BaseMgrModule, MgrModuleLoggingMixin):
             if latest < version:
                 raise RuntimeError(f"main.db version is newer ({version}) than module ({latest})")
             for i in range(version, latest):
-                self.log.info(f"upgrading main.db for {self.module_name} from {i-1}:{i}")
+                self.log.info(f"upgrading main.db for {self.module_name} from {i - 1}:{i}")
                 for sql in self.SCHEMA_VERSIONED[i]:
                     db.execute(sql)
             if version < latest:
@@ -1335,10 +1338,7 @@ class MgrModule(ceph_module.BaseMgrModule, MgrModuleLoggingMixin):
             self.create_mgr_pool()
         uri = f"file:///{self.MGR_POOL_NAME}:{self.module_name}/main.db?vfs=ceph"
         self.log.debug(f"using uri {uri}")
-        try:
-            db = sqlite3.connect(uri, check_same_thread=False, uri=True, autocommit=False)  # type: ignore[call-arg]
-        except TypeError:
-            db = sqlite3.connect(uri, check_same_thread=False, uri=True, isolation_level=None)
+        db = sqlite3.connect(uri, check_same_thread=False, uri=True, isolation_level=None)  # type: ignore[call-arg]
         # if libcephsqlite reconnects, update the addrv for blocklist
         with db:
             cur = db.execute('SELECT json_extract(ceph_status(), "$.addr");')
@@ -1853,6 +1853,18 @@ class MgrModule(ceph_module.BaseMgrModule, MgrModuleLoggingMixin):
 
         return (rc, stdout, stderr)
 
+    class _CommandResultWrapper:
+        def __init__(self, module: 'MgrModule', tag: Optional[str], result: CommandResult):
+            if tag is None:
+                tag = ""
+            self.module = module
+            self.tag = tag
+            self.result = result
+
+        def complete(self, r: int, outb: bytes, outs: bytes) -> None:
+            self.result.complete(r, outb.decode('utf-8'), outs.decode('utf-8'))
+            self.module._ceph_notify_all("command", self.tag)
+
     def send_command(
             self,
             result: CommandResult,
@@ -1886,7 +1898,13 @@ class MgrModule(ceph_module.BaseMgrModule, MgrModuleLoggingMixin):
         :param bool one_shot: a keyword-only param to make the command abort
             with EPIPE when the target resets or refuses to reconnect
         """
-        self._ceph_send_command(result, svc_type, svc_id, command, tag, inbuf, one_shot=one_shot)
+
+        if svc_type == "mds":
+            wrapped_result = self._CommandResultWrapper(self, tag, result)
+            self.log.info(f"do mds_command: mds.{svc_id} {command}")
+            self.cephfs.mds_command2(wrapped_result, svc_id, command, inbuf, one_shot=one_shot)
+        else:
+            self._ceph_send_command(result, svc_type, svc_id, command, tag, inbuf, one_shot=one_shot)
 
     def tool_exec(
         self,
@@ -2334,6 +2352,19 @@ class MgrModule(ceph_module.BaseMgrModule, MgrModuleLoggingMixin):
         self._rados.connect()
         self._ceph_register_client(None, self._rados.get_addrs(), False)
         return self._rados
+
+    @property
+    def cephfs(self) -> cephfs.LibCephFS:
+        """
+        An (unmounted) cephfs instance to be shared by any classes within this
+        mgr module that want one.
+        """
+        if self._cephfs:
+            return self._cephfs
+
+        self._cephfs = cephfs.LibCephFS(rados_inst=self.rados)
+        self._cephfs.init()
+        return self._cephfs
 
     @staticmethod
     def can_run() -> Tuple[bool, str]:

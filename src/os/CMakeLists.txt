@@ -10,6 +10,7 @@ set(libos_srcs
 if(WITH_BLUESTORE)
   list(APPEND libos_srcs
     bluestore/Allocator.cc
+    bluestore/AllocatorBase.cc
     bluestore/BitmapFreelistManager.cc
     bluestore/BlueFS.cc
     bluestore/bluefs_types.cc
@@ -43,8 +44,10 @@ endif()
 add_library(os STATIC ${libos_srcs})
 target_link_libraries(os
   legacy-option-headers
-  blk)
+  blk
+  ${FMT_LIB})
 
+target_compile_definitions(os PRIVATE -DWITH_KSTORE)
 target_link_libraries(os heap_profiler kv)
 
 if(WITH_BLUEFS)

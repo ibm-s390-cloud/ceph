@@ -3,9 +3,8 @@ import { NgModule } from '@angular/core';
 import { FormsModule, ReactiveFormsModule } from '@angular/forms';
 import { RouterModule, Routes } from '@angular/router';
 
-import { TreeModule } from '@circlon/angular-tree-component';
 import { NgbNavModule, NgbPopoverModule, NgbTooltipModule } from '@ng-bootstrap/ng-bootstrap';
-import { NgxPipeFunctionModule } from 'ngx-pipe-function';
+import { PipesModule } from '~/app/shared/pipes/pipes.module';
 
 import { ActionLabels, URLVerbs } from '~/app/shared/constants/app.constants';
 import { FeatureTogglesGuardService } from '~/app/shared/services/feature-toggles-guard.service';
@@ -63,7 +62,8 @@ import {
   NumberModule,
   RadioModule,
   SelectModule,
-  UIShellModule
+  UIShellModule,
+  TreeviewModule
 } from 'carbon-components-angular';
 
 // Icons
@@ -82,10 +82,10 @@ import Reset from '@carbon/icons/es/reset/32';
     NgbNavModule,
     NgbPopoverModule,
     NgbTooltipModule,
-    NgxPipeFunctionModule,
+    PipesModule,
     SharedModule,
     RouterModule,
-    TreeModule,
+    TreeviewModule,
     UIShellModule,
     InputModule,
     GridModule,

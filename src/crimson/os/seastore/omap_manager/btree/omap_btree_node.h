@@ -19,6 +19,7 @@ struct omap_context_t {
   TransactionManager &tm;
   Transaction &t;
   laddr_t hint;
+  omap_type_t type;
 };
 
 enum class mutation_status_t : uint8_t {
@@ -28,7 +29,7 @@ enum class mutation_status_t : uint8_t {
   FAIL = 3
 };
 
-struct OMapNode : LogicalCachedExtent {
+struct OMapNode : LogicalChildNode {
   using base_iertr = OMapManager::base_iertr;
 
   using OMapNodeRef = TCachedExtentRef<OMapNode>;
@@ -48,9 +49,10 @@ struct OMapNode : LogicalCachedExtent {
       need_merge(n_merge) {}
   };
 
-  OMapNode(ceph::bufferptr &&ptr) : LogicalCachedExtent(std::move(ptr)) {}
+  explicit OMapNode(ceph::bufferptr &&ptr) : LogicalChildNode(std::move(ptr)) {}
+  explicit OMapNode(extent_len_t length) : LogicalChildNode(length) {}
   OMapNode(const OMapNode &other)
-  : LogicalCachedExtent(other) {}
+  : LogicalChildNode(other) {}
 
   using get_value_iertr = base_iertr;
   using get_value_ret = OMapManager::omap_get_value_ret;

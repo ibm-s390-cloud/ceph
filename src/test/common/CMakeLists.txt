@@ -59,7 +59,7 @@ add_executable(unittest_lruset
   test_lruset.cc
   )
 add_ceph_unittest(unittest_lruset)
-target_link_libraries(unittest_lruset)
+target_link_libraries(unittest_lruset ceph-common)
 
 # unittest_histogram
 add_executable(unittest_histogram
@@ -229,6 +229,12 @@ add_executable(unittest_xmlformatter
 add_ceph_unittest(unittest_xmlformatter)
 target_link_libraries(unittest_xmlformatter ceph-common)
 
+add_executable(unittest_htmlformatter
+    test_htmlformatter.cc
+    )
+add_ceph_unittest(unittest_htmlformatter)
+target_link_libraries(unittest_htmlformatter ceph-common)
+
 # unittest_bit_vector
 add_executable(unittest_bit_vector
   test_bit_vector.cc
@@ -249,6 +255,20 @@ add_executable(unittest_interval_set
 )
 add_ceph_unittest(unittest_interval_set)
 target_link_libraries(unittest_interval_set ceph-common GTest::Main)
+
+# unittest_mini_flat_map
+add_executable(unittest_mini_flat_map
+  test_mini_flat_map.cc
+)
+add_ceph_unittest(unittest_mini_flat_map)
+target_link_libraries(unittest_mini_flat_map ceph-common GTest::Main)
+
+# unittest_bitset_set
+add_executable(unittest_bitset_set
+  test_bitset_set.cc
+)
+add_ceph_unittest(unittest_bitset_set)
+target_link_libraries(unittest_bitset_set ceph-common GTest::Main)
 
 # unittest_weighted_priority_queue
 add_executable(unittest_weighted_priority_queue

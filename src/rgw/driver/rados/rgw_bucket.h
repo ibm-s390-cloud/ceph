@@ -44,7 +44,8 @@ extern bool rgw_bucket_object_check_filter(const std::string& oid);
 
 void init_default_bucket_layout(CephContext *cct, rgw::BucketLayout& layout,
 				const RGWZone& zone,
-				std::optional<rgw::BucketIndexType> type);
+				std::optional<rgw::BucketIndexType> type,
+				std::optional<uint32_t> shards);
 
 struct RGWBucketCompleteInfo {
   RGWBucketInfo info;
@@ -361,6 +362,7 @@ public:
   void clear_failure() { failure = false; }
 
   const RGWBucketInfo& get_bucket_info() const { return bucket->get_info(); }
+  rgw::sal::User* get_user() { return user.get(); }
 };
 
 class RGWBucketAdminOp {

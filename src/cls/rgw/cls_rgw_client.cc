@@ -296,17 +296,13 @@ void cls_rgw_bucket_update_stats(librados::ObjectWriteOperation& o,
 }
 
 void cls_rgw_bucket_prepare_op(ObjectWriteOperation& o, RGWModifyOp op, const string& tag,
-                               const cls_rgw_obj_key& key, const string& locator, bool log_op,
-                               uint16_t bilog_flags, const rgw_zone_set& zones_trace)
+                               const cls_rgw_obj_key& key, const string& locator)
 {
   rgw_cls_obj_prepare_op call;
   call.op = op;
   call.tag = tag;
   call.key = key;
   call.locator = locator;
-  call.log_op = log_op;
-  call.bilog_flags = bilog_flags;
-  call.zones_trace = zones_trace;
   bufferlist in;
   encode(call, in);
   o.exec(RGW_CLASS, RGW_BUCKET_PREPARE_OP, in);
@@ -481,7 +477,9 @@ int cls_rgw_bi_put(librados::IoCtx& io_ctx, const string oid, const rgw_cls_bi_e
   rgw_cls_bi_put_op call;
   call.entry = entry;
   encode(call, in);
-  int r = io_ctx.exec(oid, RGW_CLASS, RGW_BI_PUT, in, out);
+  librados::ObjectWriteOperation op;
+  op.exec(RGW_CLASS, RGW_BI_PUT, in);
+  int r = io_ctx.operate(oid, &op);
   if (r < 0)
     return r;
 
@@ -1223,7 +1221,9 @@ int cls_rgw_set_bucket_resharding(librados::IoCtx& io_ctx, const string& oid,
   cls_rgw_set_bucket_resharding_op call;
   call.entry = entry;
   encode(call, in);
-  return io_ctx.exec(oid, RGW_CLASS, RGW_SET_BUCKET_RESHARDING, in, out);
+  librados::ObjectWriteOperation op;
+  op.exec(RGW_CLASS, RGW_SET_BUCKET_RESHARDING, in);
+  return io_ctx.operate(oid, &op);
 }
 
 int cls_rgw_clear_bucket_resharding(librados::IoCtx& io_ctx, const string& oid)
@@ -1231,7 +1231,9 @@ int cls_rgw_clear_bucket_resharding(librados::IoCtx& io_ctx, const string& oid)
   bufferlist in, out;
   cls_rgw_clear_bucket_resharding_op call;
   encode(call, in);
-  return io_ctx.exec(oid, RGW_CLASS, RGW_CLEAR_BUCKET_RESHARDING, in, out);
+  librados::ObjectWriteOperation op;
+  op.exec(RGW_CLASS, RGW_CLEAR_BUCKET_RESHARDING, in);
+  return io_ctx.operate(oid, &op);
 }
 
 int cls_rgw_get_bucket_resharding(librados::IoCtx& io_ctx, const string& oid,

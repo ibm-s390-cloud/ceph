@@ -29,6 +29,7 @@ from mgr_util import ServerConfigException, build_url, \
     create_self_signed_cert, get_default_addr, verify_tls_files
 
 from . import mgr
+from .controllers import nvmeof  # noqa # pylint: disable=unused-import
 from .controllers import Router, json_error_page
 from .grafana import push_local_dashboards
 from .services import nvmeof_cli  # noqa # pylint: disable=unused-import
@@ -48,10 +49,6 @@ except ImportError:
     cherrypy = None
 
 from .services.sso import load_sso_db
-
-if cherrypy is not None:
-    from .cherrypy_backports import patch_cherrypy
-    patch_cherrypy(cherrypy.__version__)
 
 # pylint: disable=wrong-import-position
 from .plugins import PLUGIN_MANAGER, debug, feature_toggles, motd  # isort:skip # noqa E501 # pylint: disable=unused-import

@@ -435,6 +435,11 @@ std::unique_ptr<Lifecycle> FilterDriver::get_lifecycle(void)
   return std::make_unique<FilterLifecycle>(std::move(lc));
 }
 
+bool FilterDriver::process_expired_objects(const DoutPrefixProvider *dpp,
+	       			           optional_yield y) {
+  return next->process_expired_objects(dpp, y);
+}
+
 std::unique_ptr<Notification> FilterDriver::get_notification(rgw::sal::Object* obj,
 				rgw::sal::Object* src_obj, req_state* s,
 				rgw::notify::EventType event_type, optional_yield y,
@@ -1046,6 +1051,17 @@ RGWAccessControlPolicy& FilterObject::get_acl()
   return next->get_acl();
 }
 
+int FilterObject::list_parts(const DoutPrefixProvider* dpp, CephContext* cct,
+			     int max_parts, int marker, int* next_marker,
+			     bool* truncated, list_parts_each_t each_func,
+			     optional_yield y)
+{
+  return next->list_parts(dpp, cct, max_parts, marker, next_marker,
+			  truncated,
+			  sal::Object::list_parts_each_t(each_func),
+			  y);
+}
+
 int FilterObject::load_obj_state(const DoutPrefixProvider *dpp,
                                  optional_yield y, bool follow_olh) {
   return next->load_obj_state(dpp, y, follow_olh);
@@ -1064,9 +1080,9 @@ int FilterObject::get_obj_attrs(optional_yield y, const DoutPrefixProvider* dpp,
 }
 
 int FilterObject::modify_obj_attrs(const char* attr_name, bufferlist& attr_val,
-				   optional_yield y, const DoutPrefixProvider* dpp)
+				   optional_yield y, const DoutPrefixProvider* dpp, uint32_t flags)
 {
-  return next->modify_obj_attrs(attr_name, attr_val, y, dpp);
+  return next->modify_obj_attrs(attr_name, attr_val, y, dpp, flags);
 }
 
 int FilterObject::delete_obj_attrs(const DoutPrefixProvider* dpp,
@@ -1123,7 +1139,6 @@ int FilterObject::restore_obj_from_cloud(Bucket* bucket,
 		          rgw_bucket_dir_entry& o,
 		          CephContext* cct,
 		          RGWObjTier& tier_config,
-		          real_time& mtime,
 		          uint64_t olh_epoch,
 		          std::optional<uint64_t> days,
 		          const DoutPrefixProvider* dpp, 
@@ -1131,7 +1146,7 @@ int FilterObject::restore_obj_from_cloud(Bucket* bucket,
 		          uint32_t flags)
 {
   return next->restore_obj_from_cloud(nextBucket(bucket), nextPlacementTier(tier),
-           placement_rule, o, cct, tier_config, mtime, olh_epoch, days, dpp, y, flags);
+           placement_rule, o, cct, tier_config, olh_epoch, days, dpp, y, flags);
 }
 
 bool FilterObject::placement_rules_match(rgw_placement_rule& r1, rgw_placement_rule& r2)

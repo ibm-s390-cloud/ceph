@@ -107,6 +107,8 @@ using ceph::crypto::MD5;
 #define RGW_ATTR_SLO_UINDICATOR RGW_ATTR_META_PREFIX "static-large-object"
 #define RGW_ATTR_X_ROBOTS_TAG	RGW_ATTR_PREFIX "x-robots-tag"
 #define RGW_ATTR_STORAGE_CLASS  RGW_ATTR_PREFIX "storage_class"
+#define RGW_ATTR_BUCKET_LOGGING RGW_ATTR_PREFIX "logging"
+#define RGW_ATTR_BUCKET_LOGGING_SOURCES RGW_ATTR_PREFIX "logging-sources"
 
 /* S3 Object Lock*/
 #define RGW_ATTR_OBJECT_LOCK        RGW_ATTR_PREFIX "object-lock"
@@ -123,6 +125,8 @@ using ceph::crypto::MD5;
 #define RGW_ATTR_RESTORE_TYPE   RGW_ATTR_PREFIX "restore-type"
 #define RGW_ATTR_RESTORE_TIME   RGW_ATTR_PREFIX "restored-at"
 #define RGW_ATTR_RESTORE_EXPIRY_DATE   RGW_ATTR_PREFIX "restore-expiry-date"
+#define RGW_ATTR_TRANSITION_TIME RGW_ATTR_PREFIX "transition-at"
+#define RGW_ATTR_RESTORE_VERSIONED_EPOCH RGW_ATTR_PREFIX "restore-versioned-epoch"
 
 #define RGW_ATTR_TEMPURL_KEY1   RGW_ATTR_META_PREFIX "temp-url-key"
 #define RGW_ATTR_TEMPURL_KEY2   RGW_ATTR_META_PREFIX "temp-url-key-2"
@@ -187,6 +191,8 @@ using ceph::crypto::MD5;
 #define RGW_ATTR_TRACE RGW_ATTR_PREFIX "trace"
 
 #define RGW_ATTR_BUCKET_NOTIFICATION RGW_ATTR_PREFIX "bucket-notification"
+
+#define RGW_ATTR_INTERNAL_MTIME RGW_ATTR_PREFIX "rgw-internal-mtime"
 
 enum class RGWFormat : int8_t {
   BAD_FORMAT = -1,
@@ -336,6 +342,7 @@ inline constexpr const char* RGW_REST_STS_XMLNS =
 #define ERR_PRESIGNED_URL_EXPIRED			 2223
 #define ERR_PRESIGNED_URL_DISABLED     2224
 #define ERR_AUTHORIZATION        2225 // SNS 403 AuthorizationError
+#define ERR_ILLEGAL_LOCATION_CONSTRAINT_EXCEPTION 2226
 
 #define ERR_BUSY_RESHARDING      2300 // also in cls_rgw_types.h, don't change!
 #define ERR_NO_SUCH_ENTITY       2301
@@ -1039,6 +1046,9 @@ class RGWSI_Zone;
 
 #include "rgw_cksum.h"
 
+
+// this represents the at-rest bucket instance object and is stored as
+// a system object
 struct RGWBucketInfo {
   rgw_bucket bucket;
   rgw_owner owner;
@@ -1425,6 +1435,7 @@ struct RGWBucketEnt {
   size_t size;
   size_t size_rounded;
   ceph::real_time creation_time;
+  ceph::real_time modification_time;
   uint64_t count;
 
   /* The placement_rule is necessary to calculate per-storage-policy statics
@@ -1746,24 +1757,22 @@ rgw::IAM::Effect evaluate_iam_policies(
 
 bool verify_user_permission(const DoutPrefixProvider* dpp,
                             req_state * const s,
-                            const RGWAccessControlPolicy& user_acl,
-                            const std::vector<rgw::IAM::Policy>& user_policies,
-                            const std::vector<rgw::IAM::Policy>& session_policies,
-                            const rgw::ARN& res,
-                            const uint64_t op,
-                            bool mandatory_policy=true);
-bool verify_user_permission_no_policy(const DoutPrefixProvider* dpp,
-                                      req_state * const s,
-                                      const RGWAccessControlPolicy& user_acl,
-                                      const int perm);
-bool verify_user_permission(const DoutPrefixProvider* dpp,
-                            req_state * const s,
                             const rgw::ARN& res,
                             const uint64_t op,
                             bool mandatory_policy=true);
 bool verify_user_permission_no_policy(const DoutPrefixProvider* dpp,
                                       req_state * const s,
                                       int perm);
+bool verify_bucket_permission(const DoutPrefixProvider* dpp,
+                              struct perm_state_base * const s,
+                              const rgw::ARN& arn,
+                              bool account_root,
+                              const RGWAccessControlPolicy& user_acl,
+                              const RGWAccessControlPolicy& bucket_acl,
+			      const boost::optional<rgw::IAM::Policy>& bucket_policy,
+                              const std::vector<rgw::IAM::Policy>& identity_policies,
+                              const std::vector<rgw::IAM::Policy>& session_policies,
+                              const uint64_t op);
 bool verify_bucket_permission(
   const DoutPrefixProvider* dpp,
   req_state * const s,
@@ -2011,3 +2020,8 @@ struct AioCompletionDeleter {
   void operator()(librados::AioCompletion* c) { c->release(); }
 };
 using aio_completion_ptr = std::unique_ptr<librados::AioCompletion, AioCompletionDeleter>;
+
+extern boost::optional<rgw::IAM::Policy>
+get_iam_policy_from_attr(CephContext* cct,
+                         const std::map<std::string, bufferlist>& attrs,
+                         const std::string& tenant);

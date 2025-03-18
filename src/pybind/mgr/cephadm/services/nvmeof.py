@@ -7,13 +7,20 @@ from ipaddress import ip_address, IPv6Address
 from mgr_module import HandleCommandResult
 from ceph.deployment.service_spec import NvmeofServiceSpec
 
-from orchestrator import OrchestratorError, DaemonDescription, DaemonDescriptionStatus
+from orchestrator import (
+    OrchestratorError,
+    DaemonDescription,
+    DaemonDescriptionStatus,
+    HostSpec,
+)
 from .cephadmservice import CephadmDaemonDeploySpec, CephService
+from .service_registry import register_cephadm_service
 from .. import utils
 
 logger = logging.getLogger(__name__)
 
 
+@register_cephadm_service
 class NvmeofService(CephService):
     TYPE = 'nvmeof'
     PROMETHEUS_PORT = 10008
@@ -38,6 +45,8 @@ class NvmeofService(CephService):
         spec = cast(NvmeofServiceSpec, self.mgr.spec_store[daemon_spec.service_name].spec)
         nvmeof_gw_id = daemon_spec.daemon_id
         host_ip = self.mgr.inventory.get_addr(daemon_spec.host)
+        map_addr = spec.addr_map.get(daemon_spec.host) if spec.addr_map else None
+        map_discovery_addr = spec.discovery_addr_map.get(daemon_spec.host) if spec.discovery_addr_map else None
 
         keyring = self.get_keyring_with_caps(self.get_auth_entity(nvmeof_gw_id),
                                              ['mon', 'profile rbd',
@@ -45,10 +54,17 @@ class NvmeofService(CephService):
 
         # TODO: check if we can force jinja2 to generate dicts with double quotes instead of using json.dumps
         transport_tcp_options = json.dumps(spec.transport_tcp_options) if spec.transport_tcp_options else None
+        iobuf_options = json.dumps(spec.iobuf_options) if spec.iobuf_options else None
         name = '{}.{}'.format(utils.name_to_config_section('nvmeof'), nvmeof_gw_id)
         rados_id = name[len('client.'):] if name.startswith('client.') else name
-        addr = spec.addr or host_ip
-        discovery_addr = spec.discovery_addr or host_ip
+
+        # The address is first searched in the per node address map,
+        # then in the spec address configuration.
+        # If neither is defined, the host IP is used as a fallback.
+        addr = map_addr or spec.addr or host_ip
+        self.mgr.log.info(f"gateway address: {addr} from {map_addr=} {spec.addr=} {host_ip=}")
+        discovery_addr = map_discovery_addr or spec.discovery_addr or host_ip
+        self.mgr.log.info(f"discovery address: {discovery_addr} from {map_discovery_addr=} {spec.discovery_addr=} {host_ip=}")
         context = {
             'spec': spec,
             'name': name,
@@ -59,12 +75,17 @@ class NvmeofService(CephService):
             'rpc_socket_dir': '/var/tmp/',
             'rpc_socket_name': 'spdk.sock',
             'transport_tcp_options': transport_tcp_options,
+            'iobuf_options': iobuf_options,
             'rados_id': rados_id
         }
         gw_conf = self.mgr.template.render('services/nvmeof/ceph-nvmeof.conf.j2', context)
 
         daemon_spec.keyring = keyring
         daemon_spec.extra_files = {'ceph-nvmeof.conf': gw_conf}
+
+        # Indicate to the daemon whether to utilize huge pages
+        if spec.spdk_mem_size:
+            daemon_spec.extra_files['spdk_mem_size'] = str(spec.spdk_mem_size)
 
         if spec.enable_auth:
             if (
@@ -86,6 +107,9 @@ class NvmeofService(CephService):
                 daemon_spec.extra_files['server_key'] = spec.server_key
                 daemon_spec.extra_files['client_key'] = spec.client_key
                 daemon_spec.extra_files['root_ca_cert'] = spec.root_ca_cert
+
+        if spec.encryption_key:
+            daemon_spec.extra_files['encryption_key'] = spec.encryption_key
 
         daemon_spec.final_config, daemon_spec.deps = self.generate_config(daemon_spec)
         daemon_spec.deps = []
@@ -185,19 +209,21 @@ class NvmeofService(CephService):
         # to clean the keyring up
         super().post_remove(daemon, is_failed_deploy=is_failed_deploy)
         service_name = daemon.service_name()
+        daemon_name = daemon.name()
 
         # remove config for dashboard nvmeof gateways if any
-        ret, out, err = self.mgr.mon_command({
+        ret, _, err = self.mgr.mon_command({
             'prefix': 'dashboard nvmeof-gateway-rm',
             'name': service_name,
+            'daemon_name': daemon_name
         })
         if not ret:
-            logger.info(f'{daemon.hostname} removed from nvmeof gateways dashboard config')
+            logger.info(f'{daemon_name} removed from nvmeof gateways dashboard config')
 
         spec = cast(NvmeofServiceSpec,
                     self.mgr.spec_store.all_specs.get(daemon.service_name(), None))
         if not spec:
-            self.mgr.log.error(f'Failed to find spec for {daemon.name()}')
+            self.mgr.log.error(f'Failed to find spec for {daemon_name}')
             return
         pool = spec.pool
         group = spec.group
@@ -213,3 +239,22 @@ class NvmeofService(CephService):
         _, _, err = self.mgr.mon_command(cmd)
         if err:
             self.mgr.log.error(f"Unable to send monitor command {cmd}, error {err}")
+
+    def get_blocking_daemon_hosts(self, service_name: str) -> List[HostSpec]:
+        # we should not deploy nvmeof daemons on hosts that have nvmeof daemons
+        # from services with a different "group" attribute (as recommended by
+        # the nvmeof team)
+        spec = cast(NvmeofServiceSpec, self.mgr.spec_store[service_name].spec)
+        nvmeof_group = cast(NvmeofServiceSpec, spec).group
+        blocking_daemons: List[DaemonDescription] = []
+        other_group_nvmeof_services = [
+            nspec for nspec in self.mgr.spec_store.get_specs_by_type('nvmeof').values()
+            if cast(NvmeofServiceSpec, nspec).group != nvmeof_group
+        ]
+        for other_group_nvmeof_service in other_group_nvmeof_services:
+            blocking_daemons += self.mgr.cache.get_daemons_by_service(other_group_nvmeof_service.service_name())
+        blocking_daemon_hosts = [
+            HostSpec(hostname=blocking_daemon.hostname)
+            for blocking_daemon in blocking_daemons if blocking_daemon.hostname is not None
+        ]
+        return blocking_daemon_hosts
