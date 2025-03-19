@@ -4,6 +4,7 @@
 #pragma once
 
 #include <seastar/core/future.hh>
+#include <seastar/core/sleep.hh>
 
 #include <boost/intrusive/list.hpp>
 #include <boost/intrusive_ptr.hpp>
@@ -11,6 +12,7 @@
 #include "osd/osd_op_util.h"
 #include "crimson/net/Connection.h"
 #include "crimson/osd/object_context.h"
+#include "crimson/osd/object_context_loader.h"
 #include "crimson/osd/osdmap_gate.h"
 #include "crimson/osd/osd_operation.h"
 #include "crimson/osd/osd_operations/client_request_common.h"
@@ -39,23 +41,24 @@ class ClientRequest final : public PhasedOperationT<ClientRequest>,
   OpInfo op_info;
   seastar::promise<> on_complete;
   unsigned instance_id = 0;
+  std::chrono::time_point<std::chrono::steady_clock> begin_time;
 
 public:
-  class PGPipeline : public CommonPGPipeline {
-    public:
-    struct AwaitMap : OrderedExclusivePhaseT<AwaitMap> {
-      static constexpr auto type_name = "ClientRequest::PGPipeline::await_map";
-    } await_map;
-    struct SendReply : OrderedExclusivePhaseT<SendReply> {
-      static constexpr auto type_name = "ClientRequest::PGPipeline::send_reply";
-    } send_reply;
-    friend class ClientRequest;
-    friend class LttngBackend;
-    friend class HistoricBackend;
-    friend class ReqRequest;
-    friend class LogMissingRequest;
-    friend class LogMissingRequestReply;
-  };
+  epoch_t get_epoch_sent_at() const {
+    return m->get_map_epoch();
+  }
+
+  bool may_write() const { return op_info.may_write(); }
+  bool may_cache() const { return op_info.may_cache(); }
+  bool may_read() const { return op_info.may_read(); }
+  template <typename T>
+  T* get_req() const {
+    static_assert(std::is_same_v<T, MOSDOp>);
+    return m.get();
+  }
+  const crimson::net::ConnectionRef &get_connection() const {
+    return l_conn;
+  }
 
   /**
    * instance_handle_t
@@ -93,21 +96,18 @@ public:
     // don't leave any references on the source core, so we just bypass it by using
     // intrusive_ptr instead.
     using ref_t = boost::intrusive_ptr<instance_handle_t>;
+    std::optional<ObjectContextLoader::Orderer> obc_orderer;
     PipelineHandle handle;
 
     std::tuple<
-      PGPipeline::AwaitMap::BlockingEvent,
+      CommonPGPipeline::WaitPGReady::BlockingEvent,
       PG_OSDMapGate::OSDMapBlocker::BlockingEvent,
-      PGPipeline::WaitForActive::BlockingEvent,
       PGActivationBlocker::BlockingEvent,
-      PGPipeline::RecoverMissing::BlockingEvent,
+      CommonPGPipeline::GetOBC::BlockingEvent,
+      CommonOBCPipeline::Process::BlockingEvent,
       scrub::PGScrubber::BlockingEvent,
-      PGPipeline::CheckAlreadyCompleteGetObc::BlockingEvent,
-      PGPipeline::LockOBC::BlockingEvent,
-      PGPipeline::Process::BlockingEvent,
-      PGPipeline::WaitRepop::BlockingEvent,
-      PGPipeline::SendReply::BlockingEvent,
-      CompletionEvent
+      CommonOBCPipeline::WaitRepop::BlockingEvent,
+      CommonOBCPipeline::SendReply::BlockingEvent
       > pg_tracking_events;
 
     template <class BlockingEventT>
@@ -210,7 +210,7 @@ public:
     void requeue(Ref<PG> pg);
     void clear_and_cancel(PG &pg);
   };
-  void complete_request();
+  void complete_request(PG &pg);
 
   static constexpr OperationTypeCode type = OperationTypeCode::client_request;
 
@@ -285,8 +285,6 @@ private:
   interruptible_future<>
   recover_missing_snaps(
     Ref<PG> pg,
-    instance_handle_t &ihref,
-    ObjectContextRef head,
     std::set<snapid_t> &snaps);
   ::crimson::interruptible::interruptible_future<
     ::crimson::osd::IOInterruptCondition> process_op(
@@ -295,7 +293,7 @@ private:
       unsigned this_instance_id);
   bool is_pg_op() const;
 
-  PGPipeline &client_pp(PG &pg);
+  CommonPGPipeline &client_pp(PG &pg);
 
   template <typename Errorator>
   using interruptible_errorator =
@@ -323,6 +321,18 @@ public:
   };
 
   void put_historic() const;
+  static interruptible_future<> maybe_inject_delay() {
+    if (common::local_conf()->osd_debug_inject_dispatch_delay_probability > 0) {
+      if (rand() % 10000 <
+        common::local_conf()->osd_debug_inject_dispatch_delay_probability * 10000) {
+        auto delay_duration = std::chrono::duration<double>(
+          common::local_conf()->osd_debug_inject_dispatch_delay_duration);
+        auto a_while = std::chrono::duration_cast<std::chrono::seconds>(delay_duration);
+        return seastar::sleep(a_while);
+      }
+    }
+    return seastar::now();
+  }
 };
 
 }

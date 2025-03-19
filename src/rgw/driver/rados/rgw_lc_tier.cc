@@ -279,10 +279,6 @@ int rgw_cloud_tier_get_object(RGWLCCloudTierCtx& tier_ctx, bool head,
 
   /* init input connection */
   req_params.get_op = !head;
-  req_params.prepend_metadata = true;
-  req_params.rgwx_stat = true;
-  req_params.sync_manifest = true;
-  req_params.skip_decrypt = true;
   req_params.cb = (RGWHTTPStreamRWRequest::ReceiveCB *)cb;
 
   ldpp_dout(tier_ctx.dpp, 20) << __func__ << "(): fetching object from cloud bucket:" << dest_bucket << ", object: " << target_obj_name << dendl;
@@ -323,8 +319,15 @@ int rgw_cloud_tier_get_object(RGWLCCloudTierCtx& tier_ctx, bool head,
 
     const auto aiter = generic_attrs_map.find(name);
     if (aiter != std::end(generic_attrs_map)) {
-      ldpp_dout(tier_ctx.dpp, 20) << __func__ << " Received attrs aiter->first = " << aiter->first << ", aiter->second = " << aiter->second << ret << dendl;
-     attrs[aiter->second] = bl;
+      attrs[aiter->second] = bl;
+    } else {
+      std::string s1 = boost::algorithm::to_lower_copy(header.first);
+      std::replace(s1.begin(), s1.end(), '_', '-');
+
+      // copy versioned epoch
+      if (s1 == "x-amz-meta-rgwx-versioned-epoch") {
+        attrs[s1] = bl;
+      }
     }
     
     if (header.first == "CONTENT_LENGTH") {

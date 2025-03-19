@@ -262,6 +262,7 @@ include:
 - ``--secret-key=<key>`` manually specifies a S3 secret key or a Swift secret key.
 - ``--gen-access-key`` automatically generates a random S3 access key.
 - ``--gen-secret`` automatically generates a random S3 secret key or a random Swift secret key.
+- ``--generate-key`` create user with or without credentials. If sets to false, then user cannot set ``gen-secret/gen-access-key/access-key/secret-key``
 
 Adding S3 keys
 ~~~~~~~~~~~~~~
@@ -382,7 +383,7 @@ form:
 
 .. prompt:: bash
 
-   --caps="[users|buckets|metadata|usage|zone|amz-cache|info|bilog|mdlog|datalog|user-policy|oidc-provider|roles|ratelimit|user-info-without-keys]=[\*|read|write|read, write]"
+   --caps="[users|buckets|metadata|usage|zone|amz-cache|info|bilog|mdlog|datalog|user-policy|oidc-provider|roles|ratelimit|user-info-without-keys|accounts]=[\*|read|write|read, write]"
 
 For example:
 

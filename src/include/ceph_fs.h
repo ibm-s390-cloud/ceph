@@ -293,6 +293,7 @@ struct ceph_mon_subscribe_ack {
 #define CEPH_MDSMAP_REFUSE_STANDBY_FOR_ANOTHER_FS (1<<7) /* fs is forbidden to use standby
                                                             for another fs */
 #define CEPH_MDSMAP_BALANCE_AUTOMATE             (1<<8)  /* automate metadata balancing */
+#define CEPH_MDSMAP_REFERENT_INODES              (1<<9)  /* create referent inode for hardlinks to store backtrace */
 #define CEPH_MDSMAP_DEFAULTS (CEPH_MDSMAP_ALLOW_SNAPS | \
 			      CEPH_MDSMAP_ALLOW_MULTIMDS_SNAPS)
 
@@ -809,8 +810,10 @@ copy_to_legacy_head(struct ceph_mds_request_head_legacy *legacy,
 
 /* client reply */
 struct ceph_mds_reply_head {
+	using code_t = __le32;
 	__le32 op;
-	__le32 result;
+	// the result field is interpreted by MClientReply message as errorcode32_t
+	code_t result;
 	__le32 mdsmap_epoch;
 	__u8 safe;                     /* true if committed to disk */
 	__u8 is_dentry, is_target;     /* true if dentry, target inode records
@@ -1005,7 +1008,7 @@ extern const char *ceph_cap_op_name(int op);
 /* extra info for cap import/export */
 struct ceph_mds_cap_peer {
 	__le64 cap_id;
-	__le32 seq;
+	__le32 issue_seq;
 	__le32 mseq;
 	__le32 mds;
 	__u8   flags;
@@ -1058,7 +1061,7 @@ struct ceph_mds_cap_release {
 struct ceph_mds_cap_item {
 	__le64 ino;
 	__le64 cap_id;
-	__le32 migrate_seq, seq;
+	__le32 migrate_seq, issue_seq;
 } __attribute__ ((packed));
 
 #define CEPH_MDS_LEASE_REVOKE           1  /*    mds  -> client */

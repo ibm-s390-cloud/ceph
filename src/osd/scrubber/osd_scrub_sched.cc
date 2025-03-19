@@ -92,7 +92,15 @@ std::optional<Scrub::SchedEntry> ScrubQueue::pop_ready_entry(
   };
 
   std::unique_lock lck{jobs_lock};
-  to_scrub.advance_time(time_now);
+  if (!to_scrub.advance_time(time_now)) {
+    // the clock was not advanced
+    dout(5) << fmt::format(
+		   ": time now ({}) is earlier than the previous not-before "
+		   "cut-off time",
+		   time_now)
+	    << dendl;
+    // we still try to dequeue, mainly to handle possible corner cases
+  }
   return to_scrub.dequeue_by_pred(eligible_filtr);
 }
 
@@ -140,10 +148,11 @@ bool ScrubQueue::remove_entry_unlocked(spg_t pgid, scrub_level_t s_or_d)
 void ScrubQueue::dump_scrubs(ceph::Formatter* f) const
 {
   ceph_assert(f != nullptr);
-  f->open_array_section("scrubs");
+  const auto query_time = ceph_clock_now();
+  Formatter::ArraySection all_scrubs_section{*f, "scrubs"};
   for_each_job(
-      [&f](const Scrub::SchedEntry& e) {
-	f->open_object_section("scrub");
+      [&f, query_time](const Scrub::SchedEntry& e) {
+        Formatter::ObjectSection job_section{*f, "scrub"sv};
 	f->dump_stream("pgid") << e.pgid;
 	f->dump_stream("sched_time") << e.schedule.not_before;
 	f->dump_stream("orig_sched_time") << e.schedule.scheduled_at;
@@ -151,10 +160,16 @@ void ScrubQueue::dump_scrubs(ceph::Formatter* f) const
 	f->dump_bool(
 	    "forced",
 	    e.schedule.scheduled_at == PgScrubber::scrub_must_stamp());
-	f->close_section();
+
+        f->dump_stream("level") << (e.level == scrub_level_t::shallow
+                                       ? "shallow"
+                                       : "deep");
+        f->dump_stream("urgency") << fmt::format("{}", e.urgency);
+        f->dump_bool("eligible", e.schedule.not_before <= query_time);
+        f->dump_bool("overdue", e.schedule.deadline < query_time);
+        f->dump_stream("last_issue") << fmt::format("{}", e.last_issue);
       },
       std::numeric_limits<int>::max());
-  f->close_section();
 }
 
 // ////////////////////////////////////////////////////////////////////////// //

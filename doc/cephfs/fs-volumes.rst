@@ -72,6 +72,14 @@ tries to remove MDS daemons using the enabled Ceph Manager orchestrator module.
    being used. See https://tracker.ceph.com/issues/49605#note-5 for more
    details.
 
+.. note:: If the snap-schedule Ceph Manager module is being used for a volume
+   and the volume is deleted, then the snap-schedule Ceph Manager module will
+   continue to hold references to the old pools. This will lead to the
+   snap-schedule Ceph Manager module faulting and logging errors. To remedy
+   this scenario, we recommend that the snap-schedule Ceph Manager module
+   be restarted after volume deletion. If the faults still persist, then we
+   recommend restarting `ceph-mgr`.
+
 List volumes by running the following command:
 
 .. prompt:: bash #
@@ -951,6 +959,32 @@ Configure the maximum number of concurrent clone operations. The default is 4:
 
    ceph config set mgr mgr/volumes/max_concurrent_clones <value>
 
+Pause the threads that asynchronously purge trashed subvolumes. This option is
+useful during cluster recovery scenarios:
+
+.. prompt:: bash #
+
+    ceph config set mgr/volumes/pause_purging true
+
+To resume purging threads:
+
+.. prompt:: bash #
+
+    ceph config set mgr/volumes/pause_purging false
+
+Pause the threads that asynchronously clone subvolume snapshots. This option is
+useful during cluster recovery scenarios:
+
+.. prompt:: bash #
+
+    ceph config set mgr/volumes/pause_cloning true
+
+To resume cloning threads:
+
+.. prompt:: bash #
+
+    ceph config set mgr/volumes/pause_cloning false
+
 Configure the ``snapshot_clone_no_wait`` option:
 
 The ``snapshot_clone_no_wait`` config option is used to reject clone-creation
@@ -1008,6 +1042,121 @@ group:
 This enables distributed subtree partitioning policy for the "csi" subvolume
 group. This will cause every subvolume within the group to be automatically
 pinned to one of the available ranks on the file system.
+
+Normalization and Case Sensitivity
+----------------------------------
+
+The subvolumegroup and subvolume interefaces have a porcelain layer API to
+manipulate the ``ceph.dir.charmap`` configurations (see also :ref:`charmap`).
+
+
+Configuring the charmap
+~~~~~~~~~~~~~~~~~~~~~~~
+
+To configure the charmap, for a subvolumegroup:
+
+.. prompt:: bash #
+
+    ceph fs subvolumegroup charmap set <vol_name> <group_name> <setting> <value>
+
+Or for a subvolume:
+
+.. prompt:: bash #
+
+    ceph fs subvolume charmap set <vol_name> <subvol> <--group_name=name> <setting> <value>
+
+For example:
+
+.. prompt:: bash #
+
+    ceph fs subvolumegroup charmap set vol csi normalization nfd
+
+outputs:
+
+::
+
+    {"casesensitive":true,"normalization":"nfd","encoding":"utf8"}
+
+
+Reading the charmap
+~~~~~~~~~~~~~~~~~~~
+
+To read the configuration, for a subvolumegroup:
+
+.. prompt:: bash #
+
+    ceph fs subvolumegroup charmap get <vol_name> <group_name> <setting>
+
+Or for a subvolume:
+
+.. prompt:: bash #
+
+    ceph fs subvolume charmap get <vol_name> <subvol> <--group_name=name> <setting>
+
+For example:
+
+.. prompt:: bash #
+
+    ceph fs subvolume charmap get vol subvol --group_name=csi casesensitive
+
+::
+
+    0
+
+To read the full ``charmap``, for a subvolumegroup:
+
+.. prompt:: bash #
+
+    ceph fs subvolumegroup charmap get <vol_name> <group_name>
+
+Or for a subvolume:
+
+.. prompt:: bash #
+
+    ceph fs subvolume charmap get <vol_name> <subvol> <--group_name=name>
+
+For example:
+
+.. prompt:: bash #
+
+    ceph fs subvolumegroup charmap get vol csi
+
+outputs:
+
+::
+
+    {"casesensitive":false,"normalization":"nfd","encoding":"utf8"}
+
+
+Removing the charmap
+~~~~~~~~~~~~~~~~~~~~
+
+To remove the configuration, for a subvolumegroup:
+
+.. prompt:: bash #
+
+    ceph fs subvolumegroup charmap rm <vol_name> <group_name
+
+Or for a subvolume:
+
+.. prompt:: bash #
+
+    ceph fs subvolume charmap rm <vol_name> <subvol> <--group_name=name>
+
+For example:
+
+.. prompt:: bash #
+
+    ceph fs subvolumegroup charmap rm vol csi
+
+outputs:
+
+::
+
+    {}
+
+.. note:: A charmap can only be removed when a subvolumegroup or subvolume is empty.
+
 
 Subvolume quiesce
 -----------------

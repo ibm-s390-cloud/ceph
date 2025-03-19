@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <ctime>
+#include <iomanip>
 #include <list>
 #include <memory>
 
@@ -323,6 +324,16 @@ void handle_connection(boost::asio::io_context& context,
                                   rgw::io::add_conlen_controlling(
                                     &real_client))));
       RGWRestfulIO client(cct, &real_client_io);
+      // getting ssl_cipher and tls_version
+      if(is_ssl) {
+        ceph_assert(typeid(Stream) == typeid(boost::asio::ssl::stream<tcp::socket&>));
+        const SSL * native_handle = reinterpret_cast<const SSL *>(stream.native_handle());
+        const auto ssl_cipher = SSL_CIPHER_get_name(SSL_get_current_cipher(native_handle));
+        const auto tls_version = SSL_get_version(native_handle);
+        auto& client_env = client.get_env();
+        client_env.set("SSL_CIPHER", ssl_cipher);
+        client_env.set("TLS_VERSION", tls_version);
+      }
       optional_yield y = null_yield;
       if (cct->_conf->rgw_beast_enable_async) {
         y = optional_yield{yield};
@@ -1194,8 +1205,11 @@ void AsioFrontend::pause()
     l.signal.emit(boost::asio::cancellation_type::terminal);
   }
 
-  // close all connections so outstanding requests fail quickly
-  connections.close(ec);
+  const bool graceful_stop{ g_ceph_context->_conf->rgw_graceful_stop };
+  if (!graceful_stop) {
+    // close all connections so outstanding requests fail quickly
+    connections.close(ec);
+  }
 
   // pause and wait until outstanding requests complete
   pause_mutex.lock(ec);

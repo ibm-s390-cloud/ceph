@@ -560,7 +560,16 @@ class Orchestrator(object):
         """
         raise NotImplementedError()
 
-    def cert_store_cert_ls(self) -> OrchResult[Dict[str, Any]]:
+    def cert_store_cert_ls(self, show_details: bool = False) -> OrchResult[Dict[str, Any]]:
+        raise NotImplementedError()
+
+    def cert_store_entity_ls(self) -> OrchResult[Dict[Any, Dict[str, List[str]]]]:
+        raise NotImplementedError()
+
+    def cert_store_reload(self) -> OrchResult[str]:
+        raise NotImplementedError()
+
+    def cert_store_cert_check(self) -> OrchResult[List[str]]:
         raise NotImplementedError()
 
     def cert_store_key_ls(self) -> OrchResult[Dict[str, Any]]:
@@ -568,7 +577,7 @@ class Orchestrator(object):
 
     def cert_store_get_cert(
         self,
-        entity: str,
+        cert_name: str,
         service_name: Optional[str] = None,
         hostname: Optional[str] = None,
         no_exception_when_missing: bool = False
@@ -577,10 +586,56 @@ class Orchestrator(object):
 
     def cert_store_get_key(
         self,
-        entity: str,
+        key_name: str,
         service_name: Optional[str] = None,
         hostname: Optional[str] = None,
         no_exception_when_missing: bool = False
+    ) -> OrchResult[str]:
+        raise NotImplementedError()
+
+    def cert_store_set_pair(
+        self,
+        cert: str,
+        key: str,
+        entity: str,
+        cert_name: Optional[str] = None,
+        service_name: Optional[str] = None,
+        hostname: Optional[str] = None,
+        force: Optional[bool] = False
+    ) -> OrchResult[str]:
+        raise NotImplementedError()
+
+    def cert_store_set_cert(
+        self,
+        cert_name: str,
+        cert: str,
+        service_name: Optional[str] = None,
+        hostname: Optional[str] = None,
+    ) -> OrchResult[str]:
+        raise NotImplementedError()
+
+    def cert_store_set_key(
+        self,
+        key: str,
+        key_name: str,
+        service_name: Optional[str] = None,
+        hostname: Optional[str] = None,
+    ) -> OrchResult[str]:
+        raise NotImplementedError()
+
+    def cert_store_rm_cert(
+        self,
+        cert_name: str,
+        service_name: Optional[str] = None,
+        hostname: Optional[str] = None,
+    ) -> OrchResult[str]:
+        raise NotImplementedError()
+
+    def cert_store_rm_key(
+        self,
+        key_name: str,
+        service_name: Optional[str] = None,
+        hostname: Optional[str] = None,
     ) -> OrchResult[str]:
         raise NotImplementedError()
 
@@ -670,7 +725,7 @@ class Orchestrator(object):
         # assert action in ["start", "stop", "reload, "restart", "redeploy"]
         raise NotImplementedError()
 
-    def daemon_action(self, action: str, daemon_name: str, image: Optional[str] = None) -> OrchResult[str]:
+    def daemon_action(self, action: str, daemon_name: str, image: Optional[str] = None, force: bool = False) -> OrchResult[str]:
         """
         Perform an action (start/stop/reload) on a daemon.
 
@@ -745,6 +800,10 @@ class Orchestrator(object):
         """
         Returns a status of the ongoing OSD removal operations.
         """
+        raise NotImplementedError()
+
+    def set_osd_spec(self, service_name: str, osd_ids: List[str]) -> OrchResult:
+        """ set service of osd """
         raise NotImplementedError()
 
     def blink_device_light(self, ident_fault: str, on: bool, locations: List['DeviceLightLoc']) -> OrchResult[List[str]]:
@@ -901,9 +960,17 @@ class Orchestrator(object):
         """Change/Add a specific setting for a tuned profile"""
         raise NotImplementedError()
 
+    def tuned_profile_add_settings(self, profile_name: str, setting: dict) -> OrchResult[str]:
+        """Change/Add multiple settings for a tuned profile"""
+        raise NotImplementedError()
+
     def tuned_profile_rm_setting(self, profile_name: str, setting: str) -> OrchResult[str]:
         """Remove a specific setting for a tuned profile"""
         raise NotImplementedError()
+
+    def tuned_profile_rm_settings(self, profile_name: str, settings: List[str]) -> OrchResult[str]:
+        """Remove multiple settings from a tuned profile"""
+        raise NotImplementedError
 
     def upgrade_check(self, image: Optional[str], version: Optional[str]) -> OrchResult[str]:
         raise NotImplementedError()
@@ -931,6 +998,9 @@ class Orchestrator(object):
 
         :return: UpgradeStatusSpec instance
         """
+        raise NotImplementedError()
+
+    def update_service(self, service_type: str, service_image: str, image: str) -> OrchResult:
         raise NotImplementedError()
 
     @_hide_in_features
@@ -1053,6 +1123,39 @@ class UpgradeStatusSpec(object):
             'message': self.message,
             'is_paused': self.is_paused,
         }
+
+    def to_dict(self) -> Dict:
+        out: Dict[str, Any] = {}
+        out['in_progress'] = self.in_progress
+        out['target_image'] = self.target_image
+        out['services_complete'] = self.services_complete
+        out['which'] = self.which
+        out['progress'] = self.progress
+        out['message'] = self.message
+        out['is_paused'] = self.is_paused
+        return out
+
+    @classmethod
+    def from_json(cls, data: dict) -> 'UpgradeStatusSpec':
+        if not isinstance(data, dict):
+            raise ValueError(f'Expected a dictionary, but got {type(data)}')
+        instance = cls()
+        instance.in_progress = data.get('in_progress', False)
+        instance.target_image = data.get('target_image', None)
+        instance.services_complete = data.get('services_complete', [])
+        instance.which = data.get('which', '<unknown>')
+        instance.progress = data.get('progress', None)
+        instance.message = data.get('message', "")
+        instance.is_paused = data.get('is_paused', False)
+
+        return instance
+
+    @staticmethod
+    def yaml_representer(dumper: 'yaml.Dumper', data: 'UpgradeStatusSpec') -> yaml.Node:
+        return dumper.represent_dict(cast(Mapping, data.to_json().items()))
+
+
+yaml.add_representer(UpgradeStatusSpec, UpgradeStatusSpec.yaml_representer)
 
 
 def handle_type_error(method: FuncT) -> FuncT:

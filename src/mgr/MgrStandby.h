@@ -21,7 +21,6 @@
 #include "common/Timer.h"
 #include "common/LogClient.h"
 
-#include "client/Client.h"
 #include "mon/MonClient.h"
 #include "osdc/Objecter.h"
 #include "PyModuleRegistry.h"
@@ -35,7 +34,7 @@ class MgrStandby : public Dispatcher,
 		   public md_config_obs_t {
 public:
   // config observer bits
-  const char** get_tracked_conf_keys() const override;
+  std::vector<std::string> get_tracked_keys() const noexcept override;
   void handle_conf_change(const ConfigProxy& conf,
 			  const std::set <std::string> &changed) override;
 
@@ -44,7 +43,6 @@ protected:
   MonClient monc;
   std::unique_ptr<Messenger> client_messenger;
   Objecter objecter;
-  Client client;
 
   MgrClient mgrc;
 
@@ -73,7 +71,7 @@ public:
   MgrStandby(int argc, const char **argv);
   ~MgrStandby() override;
 
-  bool ms_dispatch2(const ceph::ref_t<Message>& m) override;
+  Dispatcher::dispatch_result_t ms_dispatch2(const ceph::ref_t<Message>& m) override;
   bool ms_handle_reset(Connection *con) override { return false; }
   void ms_handle_remote_reset(Connection *con) override {}
   bool ms_handle_refused(Connection *con) override;

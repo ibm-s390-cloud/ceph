@@ -292,6 +292,10 @@ sleep options are disabled (set to 0),
 - :confval:`osd_recovery_sleep_hdd`
 - :confval:`osd_recovery_sleep_ssd`
 - :confval:`osd_recovery_sleep_hybrid`
+- :confval:`osd_recovery_sleep_degraded`
+- :confval:`osd_recovery_sleep_degraded_hdd`
+- :confval:`osd_recovery_sleep_degraded_ssd`
+- :confval:`osd_recovery_sleep_degraded_hybrid`
 - :confval:`osd_scrub_sleep`
 - :confval:`osd_delete_sleep`
 - :confval:`osd_delete_sleep_hdd`
@@ -748,6 +752,8 @@ mClock Config Options
 .. confval:: osd_mclock_skip_benchmark
 .. confval:: osd_mclock_override_recovery_settings
 .. confval:: osd_mclock_iops_capacity_threshold_hdd
+.. confval:: osd_mclock_iops_capacity_low_threshold_hdd
 .. confval:: osd_mclock_iops_capacity_threshold_ssd
+.. confval:: osd_mclock_iops_capacity_low_threshold_ssd
 
 .. _the dmClock algorithm: https://www.usenix.org/legacy/event/osdi10/tech/full_papers/Gulati.pdf

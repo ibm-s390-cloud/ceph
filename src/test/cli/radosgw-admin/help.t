@@ -38,11 +38,14 @@
     bucket check unlinked            check for object versions that are not visible in a bucket listing 
     bucket chown                     link bucket to specified user and update its object ACLs
     bucket reshard                   reshard bucket
+    bucket set-min-shards            set the minimum number of shards that dynamic resharding will consider for a bucket
     bucket rewrite                   rewrite all objects in the specified bucket
     bucket sync checkpoint           poll a bucket's sync status until it catches up to its remote
     bucket sync disable              disable bucket sync
     bucket sync enable               enable bucket sync
     bucket radoslist                 list rados objects backing bucket's objects
+    bucket logging flush             flush pending log records object of source bucket to the log bucket
+    bucket logging info              get info on bucket logging configuration on source bucket or list of sources in log bucket
     bi get                           retrieve bucket index object entries
     bi put                           store bucket index object entries
     bi list                          list raw bucket index entries
@@ -225,6 +228,7 @@
      --secret/--secret-key=<key>       specify secret key
      --gen-access-key                  generate random access key (for S3)
      --gen-secret                      generate random secret key
+     --generate-key                    create user with or without credentials
      --key-type=<type>                 key type, options are: swift, s3
      --key-active=<bool>               activate or deactivate a key
      --temp-url-key[-2]=<key>          temp url key

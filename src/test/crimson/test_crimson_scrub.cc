@@ -2,6 +2,7 @@
 // vim: ts=8 sw=2 smarttab
 
 #include <boost/iterator/transform_iterator.hpp>
+#include <boost/iterator/filter_iterator.hpp>
 
 #include <fmt/ranges.h>
 
@@ -280,7 +281,7 @@ struct test_obj_t : so_builder_t {
   static test_obj_t make_ec_head(const std::string &desc, Args&&... args) {
     return make(
       desc,
-      ECUtil::stripe_info_t{4, 1<<20},
+      ECUtil::stripe_info_t{4, 2, 1<<20},
       so_builder_t::make_ec_head(std::forward<Args>(args)...));
   }
 
@@ -288,7 +289,7 @@ struct test_obj_t : so_builder_t {
   static test_obj_t make_ec_clone(const std::string &desc, Args&&... args) {
     return make(
       desc,
-      ECUtil::stripe_info_t{4, 1<<20},
+      ECUtil::stripe_info_t{4, 2, 1<<20},
       so_builder_t::make_ec_clone(std::forward<Args>(args)...));
   }
 

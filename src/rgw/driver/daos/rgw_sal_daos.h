@@ -484,7 +484,6 @@ class DaosZone : public StoreZone {
   virtual const std::string& get_name() const override;
   virtual bool is_writeable() override;
   virtual bool get_redirect_endpoint(std::string* endpoint) override;
-  virtual bool has_zonegroup_api(const std::string& api) const override;
   virtual const std::string& get_current_period_id() override;
   virtual const RGWAccessKey& get_system_key() {
     return zone_params->system_key;
@@ -626,7 +625,8 @@ class DaosObject : public StoreObject {
                             rgw_obj* target_obj = NULL) override;
   virtual int modify_obj_attrs(const char* attr_name, bufferlist& attr_val,
                                optional_yield y,
-                               const DoutPrefixProvider* dpp) override;
+                               const DoutPrefixProvider* dpp,
+                               uint32_t flags = rgw::sal::FLAG_LOG_OP) override;
   virtual int delete_obj_attrs(const DoutPrefixProvider* dpp,
                                const char* attr_name,
                                optional_yield y) override;
@@ -655,7 +655,6 @@ class DaosObject : public StoreObject {
 			   rgw_bucket_dir_entry& o,
 			   CephContext* cct,
 			   RGWObjTier& tier_config,
-			   real_time& mtime,
 			   uint64_t olh_epoch,
 			   std::optional<uint64_t> days,
 			   const DoutPrefixProvider* dpp,
@@ -935,6 +934,7 @@ class DaosStore : public StoreDriver {
   virtual std::string zone_unique_trans_id(const uint64_t unique_num) override;
   virtual int cluster_stat(RGWClusterStat& stats) override;
   virtual std::unique_ptr<Lifecycle> get_lifecycle(void) override;
+  virtual bool process_expired_objects(const DoutPrefixProvider *dpp, optional_yield y) override;
   virtual std::unique_ptr<Notification> get_notification(
       rgw::sal::Object* obj, rgw::sal::Object* src_obj, struct req_state* s,
       rgw::notify::EventType event_type, optional_yield y,

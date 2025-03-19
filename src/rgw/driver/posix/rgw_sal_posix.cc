@@ -20,6 +20,7 @@
 #include <unistd.h>
 #include "rgw_multi.h"
 #include "include/scope_guard.h"
+#include "common/Clock.h" // for ceph_clock_now()
 #include "common/errno.h"
 
 #define dout_subsys ceph_subsys_rgw
@@ -2010,6 +2011,11 @@ void POSIXDriver::register_admin_apis(RGWRESTMgr* mgr)
   return next->register_admin_apis(mgr);
 }
 
+bool POSIXDriver::process_expired_objects(const DoutPrefixProvider *dpp,
+	       				                          optional_yield y) {
+  return next->process_expired_objects(dpp, y);
+}
+
 std::unique_ptr<Notification> POSIXDriver::get_notification(rgw::sal::Object* obj,
 			      rgw::sal::Object* src_obj, struct req_state* s,
 			      rgw::notify::EventType event_type, optional_yield y,
@@ -2893,6 +2899,14 @@ int POSIXObject::copy_object(const ACLOwner& owner,
   return dobj->set_obj_attrs(dpp, &attrs, nullptr, y, rgw::sal::FLAG_LOG_OP);
 }
 
+int POSIXObject::list_parts(const DoutPrefixProvider* dpp, CephContext* cct,
+			    int max_parts, int marker, int* next_marker,
+			    bool* truncated, list_parts_each_t each_func,
+			    optional_yield y)
+{
+  return -EOPNOTSUPP;
+}
+
 int POSIXObject::load_obj_state(const DoutPrefixProvider* dpp, optional_yield y, bool follow_olh)
 {
   int ret = stat(dpp);
@@ -2949,7 +2963,7 @@ int POSIXObject::get_obj_attrs(optional_yield y, const DoutPrefixProvider* dpp,
 }
 
 int POSIXObject::modify_obj_attrs(const char* attr_name, bufferlist& attr_val,
-                               optional_yield y, const DoutPrefixProvider* dpp)
+                               optional_yield y, const DoutPrefixProvider* dpp, uint32_t flags)
 {
   state.attrset[attr_name] = attr_val;
   return write_attrs(dpp, y);
@@ -3045,7 +3059,6 @@ int POSIXObject::restore_obj_from_cloud(Bucket* bucket,
           rgw_bucket_dir_entry& o,
 	  CephContext* cct,
           RGWObjTier& tier_config,
-          real_time& mtime,
           uint64_t olh_epoch,
           std::optional<uint64_t> days,
           const DoutPrefixProvider* dpp, 

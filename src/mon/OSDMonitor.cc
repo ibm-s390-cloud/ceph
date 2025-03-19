@@ -111,6 +111,7 @@ using ceph::ErasureCodeProfile;
 using ceph::Formatter;
 using ceph::JSONFormatter;
 using ceph::make_message;
+using namespace std::literals;
 
 #define dout_subsys ceph_subsys_mon
 static const string OSD_PG_CREATING_PREFIX("osd_pg_creating");
@@ -270,10 +271,14 @@ bool is_osd_writable(const OSDCapGrant& grant, const std::string* pool_name) {
     auto& match = grant.match;
     if (match.is_match_all()) {
       return true;
-    } else if (pool_name != nullptr &&
-               !match.pool_namespace.pool_name.empty() &&
-               match.pool_namespace.pool_name == *pool_name) {
-      return true;
+    } else if (pool_name != nullptr) {
+      if (!match.pool_namespace.pool_name.empty()) {
+        if (match.pool_namespace.pool_name == *pool_name) {
+          return true;
+        }
+      } else if (match.pool_tag.is_match_all()) {
+        return true;
+      }
     }
   }
   return false;
@@ -477,15 +482,13 @@ OSDMonitor::OSDMonitor(
   }
 }
 
-const char **OSDMonitor::get_tracked_conf_keys() const
+std::vector<std::string> OSDMonitor::get_tracked_keys() const noexcept
 {
-  static const char* KEYS[] = {
-    "mon_memory_target",
-    "mon_memory_autotune",
-    "rocksdb_cache_size",
-    NULL
+  return {
+    "mon_memory_target"s,
+    "mon_memory_autotune"s,
+    "rocksdb_cache_size"s
   };
-  return KEYS;
 }
 
 void OSDMonitor::handle_conf_change(const ConfigProxy& conf,
@@ -674,16 +677,16 @@ void OSDMonitor::create_initial()
   if (newmap.nearfull_ratio > 1.0) newmap.nearfull_ratio /= 100;
 
   // new cluster should require latest by default
-  if (g_conf().get_val<bool>("mon_debug_no_require_squid")) {
-    if (g_conf().get_val<bool>("mon_debug_no_require_reef")) {
-      derr << __func__ << " mon_debug_no_require_squid and reef=true" << dendl;
-      newmap.require_osd_release = ceph_release_t::quincy;
-    } else {
-      derr << __func__ << " mon_debug_no_require_squid=true" << dendl;
+  if (g_conf().get_val<bool>("mon_debug_no_require_tentacle")) {
+    if (g_conf().get_val<bool>("mon_debug_no_require_squid")) {
+      derr << __func__ << " mon_debug_no_require_tentacle and squid=true" << dendl;
       newmap.require_osd_release = ceph_release_t::reef;
+    } else {
+      derr << __func__ << " mon_debug_no_require_tentacle=true" << dendl;
+      newmap.require_osd_release = ceph_release_t::squid;
     }
   } else {
-    newmap.require_osd_release = ceph_release_t::squid;
+    newmap.require_osd_release = ceph_release_t::tentacle;
   }
 
   ceph_release_t r = ceph_release_from_name(g_conf()->mon_osd_initial_require_min_compat_client);
@@ -983,6 +986,8 @@ void OSDMonitor::update_from_paxos(bool *need_bootstrap)
       dout(20) << "Checking degraded stretch mode due to osd changes" << dendl;
       mon.maybe_go_degraded_stretch_mode();
     }
+  } else {
+    mon.try_disable_stretch_mode();
   }
 }
 
@@ -2190,6 +2195,9 @@ void OSDMonitor::print_nodes(Formatter *f)
     map<string, string>::iterator hostname = m.find("hostname");
     if (hostname == m.end()) {
       // not likely though
+      continue;
+    }
+    if (osdmap.is_destroyed(osd)) {
       continue;
     }
     osds[hostname->second].push_back(osd);
@@ -3480,26 +3488,26 @@ bool OSDMonitor::preprocess_boot(MonOpRequestRef op)
   ceph_assert(m->get_orig_source_inst().name.is_osd());
 
   // lower bound of N-2
-  if (!HAVE_FEATURE(m->osd_features, SERVER_QUINCY)) {
+  if (!HAVE_FEATURE(m->osd_features, SERVER_REEF)) {
     mon.clog->info() << "disallowing boot of OSD "
 		     << m->get_orig_source_inst()
-		     << " because the osd lacks CEPH_FEATURE_SERVER_QUINCY";
+		     << " because the osd lacks CEPH_FEATURE_SERVER_REEF";
     goto ignore;
   }
 
   // make sure osd versions do not span more than 3 releases
-  if (HAVE_FEATURE(m->osd_features, SERVER_REEF) &&
-      osdmap.require_osd_release < ceph_release_t::pacific) {
-    mon.clog->info() << "disallowing boot of reef+ OSD "
-		      << m->get_orig_source_inst()
-		      << " because require_osd_release < pacific";
-    goto ignore;
-  }
   if (HAVE_FEATURE(m->osd_features, SERVER_SQUID) &&
       osdmap.require_osd_release < ceph_release_t::quincy) {
     mon.clog->info() << "disallowing boot of squid+ OSD "
 		      << m->get_orig_source_inst()
 		      << " because require_osd_release < quincy";
+    goto ignore;
+  }
+  if (HAVE_FEATURE(m->osd_features, SERVER_TENTACLE) &&
+      osdmap.require_osd_release < ceph_release_t::reef) {
+    mon.clog->info() << "disallowing boot of tentacle+ OSD "
+		      << m->get_orig_source_inst()
+		      << " because require_osd_release < reef";
     goto ignore;
   }
 
@@ -5218,9 +5226,7 @@ void OSDMonitor::tick()
   }
 
   // expire blocklisted items?
-  for (ceph::unordered_map<entity_addr_t,utime_t>::iterator p = osdmap.blocklist.begin();
-       p != osdmap.blocklist.end();
-       ++p) {
+  for (auto p = osdmap.blocklist.begin(); p != osdmap.blocklist.end(); ++p) {
     if (p->second < now) {
       dout(10) << "expiring blocklist item " << p->first << " expired " << p->second << " < now " << now << dendl;
       pending_inc.old_blocklist.push_back(p->first);
@@ -5986,9 +5992,7 @@ bool OSDMonitor::preprocess_command(MonOpRequestRef op)
     if (f)
       f->open_array_section("blocklist");
 
-    for (ceph::unordered_map<entity_addr_t,utime_t>::iterator p = osdmap.blocklist.begin();
-	 p != osdmap.blocklist.end();
-	 ++p) {
+    for (auto p = osdmap.blocklist.begin(); p != osdmap.blocklist.end(); ++p) {
       if (f) {
 	f->open_object_section("entry");
 	f->dump_string("addr", p->first.get_legacy_str());
@@ -11928,20 +11932,7 @@ bool OSDMonitor::prepare_command_impl(MonOpRequestRef op,
       err = -EPERM;
       goto reply_no_propose;
     }
-    if (rel == ceph_release_t::quincy) {
-      if (!mon.monmap->get_required_features().contains_all(
-	    ceph::features::mon::FEATURE_QUINCY)) {
-	ss << "not all mons are quincy";
-	err = -EPERM;
-	goto reply_no_propose;
-      }
-      if ((!HAVE_FEATURE(osdmap.get_up_osd_features(), SERVER_QUINCY))
-           && !sure) {
-	ss << "not all up OSDs have CEPH_FEATURE_SERVER_QUINCY feature";
-	err = -EPERM;
-	goto reply_no_propose;
-      }
-    } else if (rel == ceph_release_t::reef) {
+    if (rel == ceph_release_t::reef) {
       if (!mon.monmap->get_required_features().contains_all(
 	    ceph::features::mon::FEATURE_REEF)) {
 	ss << "not all mons are reef";
@@ -11964,6 +11955,19 @@ bool OSDMonitor::prepare_command_impl(MonOpRequestRef op,
       if ((!HAVE_FEATURE(osdmap.get_up_osd_features(), SERVER_SQUID))
            && !sure) {
 	ss << "not all up OSDs have CEPH_FEATURE_SERVER_SQUID feature";
+	err = -EPERM;
+	goto reply_no_propose;
+      }
+    } else if (rel == ceph_release_t::tentacle) {
+      if (!mon.monmap->get_required_features().contains_all(
+	    ceph::features::mon::FEATURE_TENTACLE)) {
+	ss << "not all mons are tentacle";
+	err = -EPERM;
+	goto reply_no_propose;
+      }
+      if ((!HAVE_FEATURE(osdmap.get_up_osd_features(), SERVER_TENTACLE))
+           && !sure) {
+	ss << "not all up OSDs have CEPH_FEATURE_SERVER_TENTACLE feature";
 	err = -EPERM;
 	goto reply_no_propose;
       }
@@ -12413,7 +12417,8 @@ bool OSDMonitor::prepare_command_impl(MonOpRequestRef op,
              prefix == "osd pg-upmap-items" ||
              prefix == "osd rm-pg-upmap-items" ||
 	     prefix == "osd pg-upmap-primary" ||
-	     prefix == "osd rm-pg-upmap-primary") {
+	     prefix == "osd rm-pg-upmap-primary" ||
+	     prefix == "osd rm-pg-upmap-primary-all") {
     enum {
       OP_PG_UPMAP,
       OP_RM_PG_UPMAP,
@@ -12421,6 +12426,7 @@ bool OSDMonitor::prepare_command_impl(MonOpRequestRef op,
       OP_RM_PG_UPMAP_ITEMS,
       OP_PG_UPMAP_PRIMARY,
       OP_RM_PG_UPMAP_PRIMARY,
+      OP_RM_PG_UPMAP_PRIMARY_ALL,
     } upmap_option;
 
     if (prefix == "osd pg-upmap") {
@@ -12435,6 +12441,8 @@ bool OSDMonitor::prepare_command_impl(MonOpRequestRef op,
       upmap_option = OP_PG_UPMAP_PRIMARY;
     } else if (prefix == "osd rm-pg-upmap-primary") {
       upmap_option = OP_RM_PG_UPMAP_PRIMARY;
+    } else if (prefix == "osd rm-pg-upmap-primary-all") {
+      upmap_option = OP_RM_PG_UPMAP_PRIMARY_ALL;
     } else {
       ceph_abort_msg("invalid upmap option");
     }
@@ -12454,6 +12462,7 @@ bool OSDMonitor::prepare_command_impl(MonOpRequestRef op,
 
     case OP_PG_UPMAP_PRIMARY:	// fall through
     case OP_RM_PG_UPMAP_PRIMARY:
+    case OP_RM_PG_UPMAP_PRIMARY_ALL:
       min_release = ceph_release_t::reef;
       min_feature = CEPH_FEATUREMASK_SERVER_REEF;
       feature_name = "pg-upmap-primary";
@@ -12479,17 +12488,33 @@ bool OSDMonitor::prepare_command_impl(MonOpRequestRef op,
       goto wait;
     if (err < 0)
       goto reply_no_propose;
+
     pg_t pgid;
-    err = parse_pgid(cmdmap, ss, pgid);
-    if (err < 0)
-      goto reply_no_propose;
-    if (pending_inc.old_pools.count(pgid.pool())) {
-      ss << "pool of " << pgid << " is pending removal";
-      err = -ENOENT;
-      getline(ss, rs);
-      wait_for_commit(op,
-        new Monitor::C_Command(mon, op, err, rs, get_last_committed() + 1));
-      return true;
+    switch (upmap_option) {
+    case OP_RM_PG_UPMAP_PRIMARY_ALL: // no pgid to check
+      break;
+    
+    case OP_PG_UPMAP:
+    case OP_RM_PG_UPMAP:
+    case OP_PG_UPMAP_ITEMS:
+    case OP_RM_PG_UPMAP_ITEMS:
+    case OP_PG_UPMAP_PRIMARY:
+    case OP_RM_PG_UPMAP_PRIMARY:
+      err = parse_pgid(cmdmap, ss, pgid);
+      if (err < 0)
+	goto reply_no_propose;
+      if (pending_inc.old_pools.count(pgid.pool())) {
+	ss << "pool of " << pgid << " is pending removal";
+	err = -ENOENT;
+	getline(ss, rs);
+	wait_for_commit(op,
+	  new Monitor::C_Command(mon, op, err, rs, get_last_committed() + 1));
+	return true;
+      }
+      break;
+    
+    default:
+      ceph_abort_msg("invalid upmap option");
     }
 
     // check pending upmap changes
@@ -12523,6 +12548,8 @@ bool OSDMonitor::prepare_command_impl(MonOpRequestRef op,
                  << pgid << dendl;
         goto wait;
       }
+      break;
+    case OP_RM_PG_UPMAP_PRIMARY_ALL: // nothing to check
       break;
 
     default:
@@ -12726,6 +12753,13 @@ bool OSDMonitor::prepare_command_impl(MonOpRequestRef op,
       {
         pending_inc.old_pg_upmap_primary.insert(pgid);
         ss << "clear " << pgid << " pg_upmap_primary mapping";
+      }
+      break;
+
+    case OP_RM_PG_UPMAP_PRIMARY_ALL:
+      {
+	osdmap.rm_all_upmap_prims(cct, &pending_inc);
+	ss << "cleared all pg_upmap_primary mappings";
       }
       break;
 
@@ -15079,6 +15113,65 @@ void OSDMonitor::convert_pool_priorities(void)
   }
 }
 
+void OSDMonitor::try_disable_stretch_mode(stringstream& ss,
+     bool *okay,
+     int *errcode,
+     const string& crush_rule)
+{
+  dout(20) << __func__ << dendl;
+  *okay = false;
+  if (!osdmap.stretch_mode_enabled) {
+    ss << "stretch mode is already disabled";
+    *errcode = -EINVAL;
+    return;
+  }
+  if (osdmap.recovering_stretch_mode) {
+    ss << "stretch mode is currently recovering and cannot be disabled";
+    *errcode = -EBUSY;
+    return;
+  }
+  for (const auto& pi : osdmap.get_pools()) {
+    pg_pool_t *pool = pending_inc.get_new_pool(pi.first, &pi.second);
+    pool->peering_crush_bucket_count = 0;
+    pool->peering_crush_bucket_target = 0;
+    pool->peering_crush_bucket_barrier = 0;
+    pool->peering_crush_mandatory_member = CRUSH_ITEM_NONE;
+    pool->size = g_conf().get_val<uint64_t>("osd_pool_default_size");
+    pool->min_size = g_conf().get_osd_pool_default_min_size(pool->size);
+    // if crush rule is supplied, use it if it exists in crush map
+    if (!crush_rule.empty()) {
+      int crush_rule_id = osdmap.crush->get_rule_id(crush_rule);
+      if (crush_rule_id < 0) {
+        ss << "unrecognized crush rule " << crush_rule;
+        *errcode = -EINVAL;
+        return;
+      }
+      if (!osdmap.crush->rule_valid_for_pool_type(crush_rule_id, pool->get_type())) {
+        ss << "crush rule " << crush_rule << " type does not match pool type";
+        *errcode = -EINVAL;
+        return;
+      }
+      if (crush_rule_id == pool->crush_rule) {
+        ss << "You can't disable stretch mode with the same crush rule you are using";
+        *errcode = -EINVAL;
+        return;
+      }
+      pool->crush_rule = crush_rule_id;
+    } else {
+      // otherwise, use the default rule
+      pool->crush_rule = osdmap.crush->get_osd_pool_default_crush_replicated_rule(cct);
+    }
+  }
+  pending_inc.change_stretch_mode = true;
+  pending_inc.stretch_mode_enabled = false;
+  pending_inc.new_stretch_bucket_count = 0;
+  pending_inc.new_degraded_stretch_mode = 0;
+  pending_inc.new_stretch_mode_bucket = 0;
+  pending_inc.new_recovering_stretch_mode = 0;
+  *okay = true;
+  return;
+}
+
 void OSDMonitor::try_enable_stretch_mode_pools(stringstream& ss, bool *okay,
 					       int *errcode,
 					       set<pg_pool_t*>* pools,
@@ -15209,7 +15302,10 @@ bool OSDMonitor::check_for_dead_crush_zones(const map<string,set<string>>& dead_
   bool really_down = false;
   for (auto dbi : dead_buckets) {
     const string& bucket_name = dbi.first;
-    ceph_assert(osdmap.crush->name_exists(bucket_name));
+    if (!osdmap.crush->name_exists(bucket_name)) {
+      dout(10) << "CRUSH bucket " << bucket_name << " does not exist" << dendl;
+      continue;
+    }
     int bucket_id = osdmap.crush->get_item_id(bucket_name);
     dout(20) << "Checking " << bucket_name << " id " << bucket_id
 	     << " to see if OSDs are also down" << dendl;

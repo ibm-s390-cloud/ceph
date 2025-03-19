@@ -12,6 +12,23 @@ class GatewayInfo(NamedTuple):
     spdk_version: Optional[str] = ""
 
 
+class GatewayVersion(NamedTuple):
+    version: str
+
+
+class GatewayLogLevelInfo(NamedTuple):
+    status: int
+    error_message: str
+    log_level: int
+
+
+class SpdkNvmfLogFlagsAndLevelInfo(NamedTuple):
+    status: int
+    error_message: str
+    log_level: int
+    log_print_level: int
+
+
 class Subsystem(NamedTuple):
     nqn: str
     enable_ha: bool
@@ -51,6 +68,7 @@ class Namespace(NamedTuple):
     rw_mbytes_per_second: int
     r_mbytes_per_second: int
     w_mbytes_per_second: int
+    trash_image: bool
 
 
 class NamespaceIOStats(NamedTuple):
@@ -90,3 +108,8 @@ class Listener(NamedTuple):
 
 class Host(NamedTuple):
     nqn: str
+
+
+class RequestStatus(NamedTuple):
+    status: int
+    error_message: str

@@ -16,6 +16,7 @@
 #define CEPH_MDSMAP_H
 
 #include <algorithm>
+#include <bitset>
 #include <map>
 #include <set>
 #include <string>
@@ -31,12 +32,12 @@
 #include "include/common_fwd.h"
 
 #include "common/Clock.h"
-#include "common/Formatter.h"
 #include "common/ceph_releases.h"
 #include "common/config.h"
 
 #include "mds/mdstypes.h"
-#include "mds/cephfs_features.h"
+
+namespace ceph { class Formatter; }
 
 static inline const auto MDS_FEATURE_INCOMPAT_BASE = CompatSet::Feature(1, "base v0.20");
 static inline const auto MDS_FEATURE_INCOMPAT_CLIENTRANGES = CompatSet::Feature(2, "client writeable ranges");
@@ -237,6 +238,15 @@ public:
   bool allows_snaps() const { return test_flag(CEPH_MDSMAP_ALLOW_SNAPS); }
   bool was_snaps_ever_allowed() const { return ever_allowed_features & CEPH_MDSMAP_ALLOW_SNAPS; }
 
+  void set_referent_inodes() {
+    set_flag(CEPH_MDSMAP_REFERENT_INODES);
+    ever_allowed_features |= CEPH_MDSMAP_REFERENT_INODES;
+    explicitly_allowed_features |= CEPH_MDSMAP_REFERENT_INODES;
+  }
+  void clear_referent_inodes() { clear_flag(CEPH_MDSMAP_REFERENT_INODES); }
+  bool allow_referent_inodes() const { return test_flag(CEPH_MDSMAP_REFERENT_INODES); }
+  bool was_referent_inodes_ever_used() const { return ever_allowed_features & CEPH_MDSMAP_REFERENT_INODES; }
+
   void set_standby_replay_allowed() {
     set_flag(CEPH_MDSMAP_ALLOW_STANDBY_REPLAY);
     ever_allowed_features |= CEPH_MDSMAP_ALLOW_STANDBY_REPLAY;
@@ -397,7 +407,7 @@ public:
   int remove_data_pool(int64_t poolid) {
     std::vector<int64_t>::iterator p = std::find(data_pools.begin(), data_pools.end(), poolid);
     if (p == data_pools.end())
-      return -CEPHFS_ENOENT;
+      return -ENOENT;
     data_pools.erase(p);
     return 0;
   }
@@ -718,7 +728,8 @@ private:
     {CEPH_MDSMAP_ALLOW_STANDBY_REPLAY, "allow_standby_replay"},
     {CEPH_MDSMAP_REFUSE_CLIENT_SESSION, "refuse_client_session"},
     {CEPH_MDSMAP_REFUSE_STANDBY_FOR_ANOTHER_FS, "refuse_standby_for_another_fs"},
-    {CEPH_MDSMAP_BALANCE_AUTOMATE, "balance_automate"}
+    {CEPH_MDSMAP_BALANCE_AUTOMATE, "balance_automate"},
+    {CEPH_MDSMAP_REFERENT_INODES, "allow_referent_inodes"}
   };
 };
 WRITE_CLASS_ENCODER_FEATURES(MDSMap::mds_info_t)

@@ -16,6 +16,7 @@
 #include <sstream>
 
 #include "ECCommon.h"
+#include "ECInject.h"
 #include "messages/MOSDPGPush.h"
 #include "messages/MOSDPGPushReply.h"
 #include "messages/MOSDECSubOpWrite.h"
@@ -75,13 +76,6 @@ ostream &operator<<(ostream &lhs, const ECCommon::RMWPipeline::pipeline_state_t 
     ceph_abort_msg("invalid pipeline state");
   }
   return lhs; // unreachable
-}
-
-ostream &operator<<(ostream &lhs, const ECCommon::ec_align_t &rhs)
-{
-  return lhs << rhs.offset << ","
-	     << rhs.size << ","
-	     << rhs.flags;
 }
 
 ostream &operator<<(ostream &lhs, const ECCommon::ec_extent_t &rhs)
@@ -158,7 +152,7 @@ ostream &operator<<(ostream &lhs, const ECCommon::RMWPipeline::Op &rhs)
     rhs.client_op->get_req()->print(lhs);
   }
 #endif
-  lhs << " roll_forward_to=" << rhs.roll_forward_to
+  lhs << " pg_committed_to=" << rhs.pg_committed_to
       << " temp_added=" << rhs.temp_added
       << " temp_cleared=" << rhs.temp_cleared
       << " pending_read=" << rhs.pending_read
@@ -226,8 +220,14 @@ void ECCommon::ReadPipeline::get_all_avail_shards(
        ++i) {
     dout(10) << __func__ << ": checking acting " << *i << dendl;
     const pg_missing_t &missing = get_parent()->get_shard_missing(*i);
-    if (error_shards.find(*i) != error_shards.end())
+    if (error_shards.contains(*i)) {
       continue;
+    }
+    if (cct->_conf->bluestore_debug_inject_read_err &&
+          ECInject::test_read_error1(ghobject_t(hoid, ghobject_t::NO_GEN, i->shard))) {
+      dout(0) << __func__ << " Error inject - Missing shard " << i->shard << dendl;
+      continue;
+    }
     if (!missing.is_missing(hoid)) {
       ceph_assert(!have.count(i->shard));
       have.insert(i->shard);
@@ -322,19 +322,15 @@ void ECCommon::ReadPipeline::get_min_want_to_read_shards(
   const uint64_t offset,
   const uint64_t length,
   const ECUtil::stripe_info_t& sinfo,
-  const vector<int>& chunk_mapping,
   set<int> *want_to_read)
 {
   const auto [left_chunk_index, right_chunk_index] =
     sinfo.offset_length_to_data_chunk_indices(offset, length);
   const auto distance =
-    std::min(right_chunk_index - left_chunk_index,
-             sinfo.get_data_chunk_count());
+    std::min(right_chunk_index - left_chunk_index, (uint64_t)sinfo.get_k());
   for(uint64_t i = 0; i < distance; i++) {
-    auto raw_chunk = (left_chunk_index + i) % sinfo.get_data_chunk_count();
-    auto chunk = chunk_mapping.size() > raw_chunk ?
-      chunk_mapping[raw_chunk] : static_cast<int>(raw_chunk);
-    want_to_read->insert(chunk);
+    auto raw_shard = (left_chunk_index + i) % sinfo.get_k();
+    want_to_read->insert(sinfo.get_shard(raw_shard));
   }
 }
 
@@ -343,8 +339,7 @@ void ECCommon::ReadPipeline::get_min_want_to_read_shards(
   const uint64_t length,
   set<int> *want_to_read)
 {
-  get_min_want_to_read_shards(
-    offset, length, sinfo, ec_impl->get_chunk_mapping(), want_to_read);
+  get_min_want_to_read_shards(offset, length, sinfo, want_to_read);
   dout(20) << __func__ << ": offset " << offset << " length " << length
 	   << " want_to_read " << *want_to_read << dendl;
 }
@@ -502,10 +497,8 @@ void ECCommon::ReadPipeline::do_read_op(ReadOp &op)
 void ECCommon::ReadPipeline::get_want_to_read_shards(
   std::set<int> *want_to_read) const
 {
-  const std::vector<int> &chunk_mapping = ec_impl->get_chunk_mapping();
-  for (int i = 0; i < (int)ec_impl->get_data_chunk_count(); ++i) {
-    int chunk = (int)chunk_mapping.size() > i ? chunk_mapping[i] : i;
-    want_to_read->insert(chunk);
+  for (int i = 0; i < (int)sinfo.get_k(); ++i) {
+    want_to_read->insert(sinfo.get_shard(i));
   }
 }
 
@@ -518,7 +511,7 @@ struct ClientReadCompleter : ECCommon::ReadCompleter {
   void finish_single_request(
     const hobject_t &hoid,
     ECCommon::read_result_t &res,
-    list<ECCommon::ec_align_t> to_read,
+    list<ec_align_t> to_read,
     set<int> wanted_to_read) override
   {
     auto* cct = read_pipeline.cct;
@@ -531,12 +524,8 @@ struct ClientReadCompleter : ECCommon::ReadCompleter {
     ceph_assert(res.errors.empty());
     for (auto &&read: to_read) {
       const auto bounds = make_pair(read.offset, read.size);
-      // the configurable serves only the preservation of old behavior
-      // which will be dropped. ReadPipeline is actually able to handle
-      // reads aligned to chunk size.
-      const auto aligned = g_conf()->osd_ec_partial_reads \
-        ? read_pipeline.sinfo.offset_len_to_chunk_bounds(bounds)
-        : read_pipeline.sinfo.offset_len_to_stripe_bounds(bounds);
+      const auto aligned =
+	read_pipeline.sinfo.offset_len_to_chunk_bounds(bounds);
       ceph_assert(res.returned.front().get<0>() == aligned.first);
       ceph_assert(res.returned.front().get<1>() == aligned.second);
       map<int, bufferlist> to_decode;
@@ -563,13 +552,30 @@ struct ClientReadCompleter : ECCommon::ReadCompleter {
         goto out;
       }
       bufferlist trimmed;
-      auto off = read.offset - aligned.first;
-      auto len = std::min(read.size, bl.length() - off);
+      // If partial stripe reads are disabled aligned_offset_in_stripe will
+      // be 0 which will mean trim_offset is 0. When partial reads are enabled
+      // the shards read (wanted_to_read) is a union of the requirements for
+      // each stripe, each range being read may need to trim unneeded shards
+      uint64_t aligned_offset_in_stripe = aligned.first -
+	read_pipeline.sinfo.logical_to_prev_stripe_offset(aligned.first);
+      uint64_t chunk_size = read_pipeline.sinfo.get_chunk_size();
+      uint64_t trim_offset = 0;
+      for (auto shard : wanted_to_read) {
+	if (read_pipeline.sinfo.get_raw_shard(shard) * chunk_size <
+	    aligned_offset_in_stripe) {
+	  trim_offset += chunk_size;
+	} else {
+	  break;
+	}
+      }
+      auto off = read.offset + trim_offset - aligned.first;
       dout(20) << __func__ << " bl.length()=" << bl.length()
-	       << " len=" << len << " read.size=" << read.size
-	       << " off=" << off << " read.offset=" << read.offset
-	       << dendl;
-      trimmed.substr_of(bl, off, len);
+	       << " off=" << off
+	       << " read.offset=" << read.offset
+	       << " read.size=" << read.size
+	       << " trim_offset="<< trim_offset << dendl;
+      ceph_assert(read.size <= bl.length() - off);
+      trimmed.substr_of(bl, off, read.size);
       result.insert(
 	read.offset, trimmed.length(), std::move(trimmed));
       res.returned.pop_front();
@@ -594,7 +600,7 @@ static ostream& _prefix(std::ostream *_dout, ClientReadCompleter *read_completer
 }
 
 void ECCommon::ReadPipeline::objects_read_and_reconstruct(
-  const map<hobject_t, std::list<ECCommon::ec_align_t>> &reads,
+  const map<hobject_t, std::list<ec_align_t>> &reads,
   bool fast_read,
   GenContextURef<ECCommon::ec_extents_t &&> &&func)
 {
@@ -895,7 +901,7 @@ bool ECCommon::RMWPipeline::try_reads_to_commit()
       should_send ? iter->second : empty,
       op->version,
       op->trim_to,
-      op->roll_forward_to,
+      op->pg_committed_to,
       op->log_entries,
       op->updated_hit_set_history,
       op->temp_added,
@@ -912,6 +918,11 @@ bool ECCommon::RMWPipeline::try_reads_to_commit()
     if (*i == get_parent()->whoami_shard()) {
       should_write_local = true;
       local_write_op.claim(sop);
+    } else if (cct->_conf->bluestore_debug_inject_read_err &&
+                 ECInject::test_write_error1(ghobject_t(op->hoid,
+                   ghobject_t::NO_GEN, i->shard))) {
+      dout(0) << " Error inject - Dropping write message to shard " <<
+        i->shard << dendl;
     } else {
       MOSDECSubOpWrite *r = new MOSDECSubOpWrite(sop);
       r->pgid = spg_t(get_parent()->primary_spg_t().pgid, i->shard);
@@ -970,8 +981,8 @@ bool ECCommon::RMWPipeline::try_finish_rmw()
   dout(10) << __func__ << ": " << *op << dendl;
   dout(20) << __func__ << ": " << cache << dendl;
 
-  if (op->roll_forward_to > completed_to)
-    completed_to = op->roll_forward_to;
+  if (op->pg_committed_to > completed_to)
+    completed_to = op->pg_committed_to;
   if (op->version > committed_to)
     committed_to = op->version;
 
@@ -984,7 +995,7 @@ bool ECCommon::RMWPipeline::try_finish_rmw()
       auto nop = std::make_unique<ECDummyOp>();
       nop->hoid = op->hoid;
       nop->trim_to = op->trim_to;
-      nop->roll_forward_to = op->version;
+      nop->pg_committed_to = op->version;
       nop->tid = tid;
       nop->reqid = op->reqid;
       waiting_reads.push_back(*nop);

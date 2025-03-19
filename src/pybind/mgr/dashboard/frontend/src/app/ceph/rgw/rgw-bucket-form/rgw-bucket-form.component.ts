@@ -6,7 +6,7 @@ import {
   ViewChild,
   ElementRef
 } from '@angular/core';
-import { AbstractControl, Validators } from '@angular/forms';
+import { AbstractControl, FormGroup, Validators } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
 
 import _ from 'lodash';
@@ -23,7 +23,6 @@ import { CdForm } from '~/app/shared/forms/cd-form';
 import { CdFormBuilder } from '~/app/shared/forms/cd-form-builder';
 import { CdFormGroup } from '~/app/shared/forms/cd-form-group';
 import { CdValidators } from '~/app/shared/forms/cd-validators';
-import { ModalService } from '~/app/shared/services/modal.service';
 import { NotificationService } from '~/app/shared/services/notification.service';
 import { rgwBucketEncryptionModel } from '../models/rgw-bucket-encryption';
 import { RgwBucketMfaDelete } from '../models/rgw-bucket-mfa-delete';
@@ -39,6 +38,9 @@ import { RgwMultisiteService } from '~/app/shared/api/rgw-multisite.service';
 import { RgwDaemonService } from '~/app/shared/api/rgw-daemon.service';
 import { map, switchMap } from 'rxjs/operators';
 import { TextAreaXmlFormatterService } from '~/app/shared/services/text-area-xml-formatter.service';
+import { RgwRateLimitComponent } from '../rgw-rate-limit/rgw-rate-limit.component';
+import { RgwRateLimitConfig } from '../models/rgw-rate-limit';
+import { ModalCdsService } from '~/app/shared/services/modal-cds.service';
 
 @Component({
   selector: 'cd-rgw-bucket-form',
@@ -86,13 +88,15 @@ export class RgwBucketFormComponent extends CdForm implements OnInit, AfterViewC
     return this.bucketForm.getValue('mfa-delete');
   }
 
+  @ViewChild(RgwRateLimitComponent, { static: false }) rateLimitComponent!: RgwRateLimitComponent;
+
   constructor(
     private route: ActivatedRoute,
     private router: Router,
     private formBuilder: CdFormBuilder,
     private rgwBucketService: RgwBucketService,
     private rgwSiteService: RgwSiteService,
-    private modalService: ModalService,
+    private modalService: ModalCdsService,
     private rgwUserService: RgwUserService,
     private notificationService: NotificationService,
     private textAreaJsonFormatterService: TextAreaJsonFormatterService,
@@ -307,10 +311,12 @@ export class RgwBucketFormComponent extends CdForm implements OnInit, AfterViewC
   goToListView() {
     this.router.navigate(['/rgw/bucket']);
   }
-
+  rateLimitFormInit(rateLimitForm: FormGroup) {
+    this.bucketForm.addControl('rateLimit', rateLimitForm);
+  }
   submit() {
     // Exit immediately if the form isn't dirty.
-    if (this.bucketForm.pristine) {
+    if (this.bucketForm.pristine && this.rateLimitComponent.form.pristine) {
       this.goToListView();
       return;
     }
@@ -365,6 +371,7 @@ export class RgwBucketFormComponent extends CdForm implements OnInit, AfterViewC
               NotificationType.success,
               $localize`Updated Object Gateway bucket '${values.bid}'.`
             );
+            this.updateBucketRateLimit();
             this.goToListView();
           },
           () => {
@@ -398,10 +405,26 @@ export class RgwBucketFormComponent extends CdForm implements OnInit, AfterViewC
               $localize`Created Object Gateway bucket '${values.bid}'`
             );
             this.goToListView();
+            this.updateBucketRateLimit();
           },
           () => {
             // Reset the 'Submit' button.
             this.bucketForm.setErrors({ cdSubmitButton: true });
+          }
+        );
+    }
+  }
+
+  updateBucketRateLimit() {
+    // Check if bucket ratelimit has been modified.
+    const rateLimitConfig: RgwRateLimitConfig = this.rateLimitComponent.getRateLimitFormValue();
+    if (!!rateLimitConfig) {
+      this.rgwBucketService
+        .updateBucketRateLimit(this.bucketForm.getValue('bid'), rateLimitConfig)
+        .subscribe(
+          () => {},
+          (error: any) => {
+            this.notificationService.show(NotificationType.error, error);
           }
         );
     }
@@ -475,7 +498,7 @@ export class RgwBucketFormComponent extends CdForm implements OnInit, AfterViewC
 
   showTagModal(index?: number) {
     const modalRef = this.modalService.show(BucketTagModalComponent);
-    const modalComponent = modalRef.componentInstance as BucketTagModalComponent;
+    const modalComponent = modalRef as BucketTagModalComponent;
     modalComponent.currentKeyTags = this.tags.map((item) => item.key);
 
     if (_.isNumber(index)) {

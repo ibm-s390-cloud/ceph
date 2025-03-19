@@ -9,6 +9,7 @@
 #include "crimson/os/seastore/omap_manager/btree/omap_btree_node.h"
 #include "crimson/os/seastore/omap_manager/btree/omap_btree_node_impl.h"
 #include "seastar/core/thread.hh"
+#include "crimson/os/seastore/omap_manager/btree/btree_omap_manager.h"
 
 SET_SUBSYS(seastore_omap);
 
@@ -495,8 +496,11 @@ OMapInnerNode::merge_entry(
 OMapInnerNode::internal_iterator_t
 OMapInnerNode::get_containing_child(const std::string &key)
 {
-  auto iter = std::find_if(iter_begin(), iter_end(),
-       [&key](auto it) { return it.contains(key); });
+  auto iter = string_lower_bound(key);
+  if (iter == iter_end() || (iter != iter_begin() && iter.get_key() > key)) {
+    iter--;
+  }
+  assert(iter.contains(key));
   return iter;
 }
 
@@ -673,7 +677,7 @@ OMapLeafNode::make_split_children(omap_context_t oc)
 {
   LOG_PREFIX(OMapLeafNode::make_split_children);
   DEBUGT("this: {}", oc.t, *this);
-  return oc.tm.alloc_extents<OMapLeafNode>(oc.t, oc.hint, OMAP_LEAF_BLOCK_SIZE, 2)
+  return oc.tm.alloc_extents<OMapLeafNode>(oc.t, oc.hint, get_len(), 2)
     .si_then([this] (auto &&ext_pair) {
       auto left = ext_pair.front();
       auto right = ext_pair.back();
@@ -692,7 +696,7 @@ OMapLeafNode::make_full_merge(omap_context_t oc, OMapNodeRef right)
   ceph_assert(right->get_type() == TYPE);
   LOG_PREFIX(OMapLeafNode::make_full_merge);
   DEBUGT("this: {}", oc.t, *this);
-  return oc.tm.alloc_non_data_extent<OMapLeafNode>(oc.t, oc.hint, OMAP_LEAF_BLOCK_SIZE)
+  return oc.tm.alloc_non_data_extent<OMapLeafNode>(oc.t, oc.hint, get_len())
     .si_then([this, right] (auto &&replacement) {
       replacement->merge_from(*this, *right->cast<OMapLeafNode>());
       return full_merge_ret(
@@ -710,7 +714,7 @@ OMapLeafNode::make_balanced(omap_context_t oc, OMapNodeRef _right)
   ceph_assert(_right->get_type() == TYPE);
   LOG_PREFIX(OMapLeafNode::make_balanced);
   DEBUGT("this: {}",  oc.t, *this);
-  return oc.tm.alloc_extents<OMapLeafNode>(oc.t, oc.hint, OMAP_LEAF_BLOCK_SIZE, 2)
+  return oc.tm.alloc_extents<OMapLeafNode>(oc.t, oc.hint, get_len(), 2)
     .si_then([this, _right] (auto &&replacement_pair) {
       auto replacement_left = replacement_pair.front();
       auto replacement_right = replacement_pair.back();
@@ -734,23 +738,29 @@ omap_load_extent(omap_context_t oc, laddr_t laddr, depth_t depth)
 {
   ceph_assert(depth > 0);
   if (depth > 1) {
-    return oc.tm.read_extent<OMapInnerNode>(oc.t, laddr,
-      OMAP_INNER_BLOCK_SIZE)
-      .handle_error_interruptible(
-      omap_load_extent_iertr::pass_further{},
-      crimson::ct_error::assert_all{ "Invalid error in omap_load_extent" }
-    ).si_then(
-      [](auto&& e) {
-      return seastar::make_ready_future<OMapNodeRef>(std::move(e));
-    });
-  } else {
-    return oc.tm.read_extent<OMapLeafNode>(oc.t, laddr, OMAP_LEAF_BLOCK_SIZE
+    return oc.tm.read_extent<OMapInnerNode>(
+        oc.t, laddr, OMAP_INNER_BLOCK_SIZE
     ).handle_error_interruptible(
       omap_load_extent_iertr::pass_further{},
       crimson::ct_error::assert_all{ "Invalid error in omap_load_extent" }
-    ).si_then(
-      [](auto&& e) {
-      return seastar::make_ready_future<OMapNodeRef>(std::move(e));
+    ).si_then([](auto maybe_indirect_extent) {
+      assert(!maybe_indirect_extent.is_indirect());
+      assert(!maybe_indirect_extent.is_clone);
+      return seastar::make_ready_future<OMapNodeRef>(
+          std::move(maybe_indirect_extent.extent));
+    });
+  } else {
+    return oc.tm.read_extent<OMapLeafNode>(
+        oc.t, laddr,
+	BtreeOMapManager::get_leaf_size(oc.type)
+    ).handle_error_interruptible(
+      omap_load_extent_iertr::pass_further{},
+      crimson::ct_error::assert_all{ "Invalid error in omap_load_extent" }
+    ).si_then([](auto maybe_indirect_extent) {
+      assert(!maybe_indirect_extent.is_indirect());
+      assert(!maybe_indirect_extent.is_clone);
+      return seastar::make_ready_future<OMapNodeRef>(
+          std::move(maybe_indirect_extent.extent));
     });
   }
 }

@@ -15,35 +15,54 @@
 #ifndef CEPH_MDS_SERVER_H
 #define CEPH_MDS_SERVER_H
 
-#include <string_view>
-
-using namespace std::literals::string_view_literals;
+#include "mds/mdstypes.h" // for xattr_map
 
 #include <common/DecayCounter.h>
+#include "common/ref.h" // for cref_t
 
 #include "include/common_fwd.h"
-
-#include "messages/MClientReconnect.h"
-#include "messages/MClientReply.h"
-#include "messages/MClientRequest.h"
-#include "messages/MClientSession.h"
-#include "messages/MClientSnap.h"
-#include "messages/MClientReclaim.h"
-#include "messages/MClientReclaimReply.h"
-#include "messages/MLock.h"
+#include "include/Context.h" // for C_GatherBase
 
 #include "CInode.h"
-#include "MDSRank.h"
 #include "Mutation.h"
-#include "MDSContext.h"
+
+#ifdef WITH_SEASTAR
+#include "crimson/common/perf_counters_collection.h"
+#else
+#include "common/perf_counters_collection.h"
+#endif
+
+#include <map>
+#include <memory>
+#include <set>
+#include <string_view>
+#include <vector>
+
+using namespace std::literals::string_view_literals;
 
 class OSDMap;
 class LogEvent;
 class EMetaBlob;
 class EUpdate;
+class LogSegment;
+class MDCache;
 class MDLog;
+class MDSContext;
+class MDSRank;
+class Session;
 struct SnapInfo;
+struct SnapRealm;
+class Message;
 class MetricsHandler;
+class MClientReconnect;
+class MClientReply;
+class MClientRequest;
+class MClientSession;
+class MClientSnap;
+class MClientReclaim;
+class MClientReclaimReply;
+class MLock;
+class MMDSPeerRequest;
 
 enum {
   l_mdss_first = 1000,
@@ -129,8 +148,9 @@ public:
   version_t prepare_force_open_sessions(std::map<client_t,entity_inst_t> &cm,
 					std::map<client_t,client_metadata_t>& cmm,
 					std::map<client_t,std::pair<Session*,uint64_t> >& smap);
-  void finish_force_open_sessions(const std::map<client_t,std::pair<Session*,uint64_t> >& smap,
+  void finish_force_open_sessions(std::map<client_t,std::pair<Session*,uint64_t> >& smap,
 				  bool dec_import=true);
+  void close_forced_opened_sessions(const std::map<client_t,std::pair<Session*,uint64_t> >& smap);
   void flush_client_sessions(std::set<client_t>& client_set, MDSGatherBuilder& gather);
   void finish_flush_session(Session *session, version_t seq);
   void terminate_sessions();
@@ -189,7 +209,7 @@ public:
   bool _check_access(Session *session, CInode *in, unsigned mask, int caller_uid, int caller_gid, int setattr_uid, int setattr_gid);
   CDentry *prepare_stray_dentry(const MDRequestRef& mdr, CInode *in);
   CInode* prepare_new_inode(const MDRequestRef& mdr, CDir *dir, inodeno_t useino, unsigned mode,
-			    const file_layout_t *layout=nullptr);
+			    const file_layout_t *layout=nullptr, bool referent_inode=false);
   void journal_allocated_inos(const MDRequestRef& mdr, EMetaBlob *blob);
   void apply_allocated_inos(const MDRequestRef& mdr, Session *session);
 
@@ -215,7 +235,8 @@ public:
   void handle_client_file_readlock(const MDRequestRef& mdr);
 
   bool xlock_policylock(const MDRequestRef& mdr, CInode *in,
-			bool want_layout=false, bool xlock_snaplock=false);
+			bool want_layout=false, bool xlock_snaplock=false,
+                        MutationImpl::LockOpVec lov={});
   CInode* try_get_auth_inode(const MDRequestRef& mdr, inodeno_t ino);
   void handle_client_setattr(const MDRequestRef& mdr);
   void handle_client_setlayout(const MDRequestRef& mdr);
@@ -243,6 +264,8 @@ public:
   // check layout
   bool is_valid_layout(file_layout_t *layout);
 
+  bool can_handle_charmap(const MDRequestRef& mdr, CDentry* dn);
+
   // open
   void handle_client_open(const MDRequestRef& mdr);
   void handle_client_openc(const MDRequestRef& mdr);  // O_CREAT variant.
@@ -256,12 +279,12 @@ public:
   // link
   void handle_client_link(const MDRequestRef& mdr);
   void _link_local(const MDRequestRef& mdr, CDentry *dn, CInode *targeti, SnapRealm *target_realm);
-  void _link_local_finish(const MDRequestRef& mdr, CDentry *dn, CInode *targeti,
+  void _link_local_finish(const MDRequestRef& mdr, CDentry *dn, CInode *targeti, CInode *referenti,
 			  version_t, version_t, bool);
 
-  void _link_remote(const MDRequestRef& mdr, bool inc, CDentry *dn, CInode *targeti);
+  void _link_remote(const MDRequestRef& mdr, bool inc, CDentry *dn, CInode *targeti, CDentry *straydn);
   void _link_remote_finish(const MDRequestRef& mdr, bool inc, CDentry *dn, CInode *targeti,
-			   version_t);
+                           CInode *referenti, CDentry *sd, version_t);
 
   void handle_peer_link_prep(const MDRequestRef& mdr);
   void _logged_peer_link(const MDRequestRef& mdr, CInode *targeti, bool adjust_realm);
@@ -447,11 +470,15 @@ private:
            xattr_name == "ceph.dir.subvolume" ||
            xattr_name == "ceph.dir.pin" ||
            xattr_name == "ceph.dir.pin.random" ||
-           xattr_name == "ceph.dir.pin.distributed";
+           xattr_name == "ceph.dir.pin.distributed" ||
+           xattr_name == "ceph.dir.charmap"sv ||
+           xattr_name == "ceph.dir.normalization"sv ||
+           xattr_name == "ceph.dir.encoding"sv ||
+           xattr_name == "ceph.dir.casesensitive"sv;
   }
 
   static bool is_ceph_dir_vxattr(std::string_view xattr_name) {
-    return (xattr_name == "ceph.dir.layout" ||
+    return xattr_name == "ceph.dir.layout" ||
 	    xattr_name == "ceph.dir.layout.json" ||
 	    xattr_name == "ceph.dir.layout.object_size" ||
 	    xattr_name == "ceph.dir.layout.stripe_unit" ||
@@ -462,7 +489,11 @@ private:
 	    xattr_name == "ceph.dir.layout.pool_namespace" ||
 	    xattr_name == "ceph.dir.pin" ||
 	    xattr_name == "ceph.dir.pin.random" ||
-	    xattr_name == "ceph.dir.pin.distributed");
+	    xattr_name == "ceph.dir.pin.distributed" ||
+            xattr_name == "ceph.dir.charmap"sv ||
+            xattr_name == "ceph.dir.normalization"sv ||
+            xattr_name == "ceph.dir.encoding"sv ||
+            xattr_name == "ceph.dir.casesensitive"sv;
   }
 
   static bool is_ceph_file_vxattr(std::string_view xattr_name) {
@@ -526,7 +557,7 @@ private:
   MDLog *mdlog;
   PerfCounters *logger = nullptr;
 
-  // OSDMap full status, used to generate CEPHFS_ENOSPC on some operations
+  // OSDMap full status, used to generate ENOSPC on some operations
   bool is_full = false;
 
   // State for while in reconnect
@@ -543,6 +574,7 @@ private:
   feature_bitset_t supported_metric_spec;
   feature_bitset_t required_client_features;
 
+  bool mds_allow_async_dirops = true;
   bool forward_all_requests_to_auth = false;
   bool replay_unsafe_with_closed_session = false;
   double cap_revoke_eviction_timeout = 0;

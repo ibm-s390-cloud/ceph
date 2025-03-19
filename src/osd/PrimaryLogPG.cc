@@ -55,6 +55,7 @@
 #include "osd/scrubber/PrimaryLogScrub.h"
 #include "osd/scrubber/ScrubStore.h"
 #include "osd/scrubber/pg_scrubber.h"
+#include "ECInject.h"
 
 #include "OSD.h"
 #include "OpRequest.h"
@@ -295,17 +296,18 @@ void PrimaryLogPG::OpContext::start_async_reads(PrimaryLogPG *pg)
 	    pair<bufferlist*, Context*> > > in;
   in.swap(pending_async_reads);
   // TODO: drop the converter
-  list<pair<ECCommon::ec_align_t,
+  list<pair<ec_align_t,
 	    pair<bufferlist*, Context*> > > in_native;
   for (auto [align_tuple, ctx_pair] : in) {
     in_native.emplace_back(
-      ECCommon::ec_align_t{
+      ec_align_t{
         align_tuple.get<0>(), align_tuple.get<1>(), align_tuple.get<2>()
       },
       std::move(ctx_pair));
   }
   pg->pgbackend->objects_read_async(
     obc->obs.oi.soid,
+    obc->obs.oi.size,
     in_native,
     new OnReadComplete(pg, this), pg->get_pool().fast_read);
 }
@@ -541,6 +543,11 @@ void PrimaryLogPG::schedule_recovery_work(
   osd->queue_recovery_context(
     this, c, cost,
     recovery_state.get_recovery_op_priority());
+}
+
+common::intrusive_timer &PrimaryLogPG::get_pg_timer()
+{
+  return osd->pg_timer;
 }
 
 void PrimaryLogPG::replica_clear_repop_obc(
@@ -2053,6 +2060,10 @@ void PrimaryLogPG::do_op(OpRequestRef& op)
     }
   }
 
+  if (!is_primary()) {
+    osd->logger->inc(l_osd_replica_read);
+  }
+
   if (!check_laggy(op)) {
     return;
   }
@@ -2183,6 +2194,7 @@ void PrimaryLogPG::do_op(OpRequestRef& op)
   // missing object?
   if (is_unreadable_object(head)) {
     if (!is_primary()) {
+      osd->logger->inc(l_osd_replica_read_redirect_missing);
       osd->reply_op_error(op, -EAGAIN);
       return;
     }
@@ -2276,6 +2288,16 @@ void PrimaryLogPG::do_op(OpRequestRef& op)
     }
   }
 
+  if (cct->_conf->bluestore_debug_inject_read_err &&
+      op->may_write() &&
+      pool.info.is_erasure() &&
+      ECInject::test_write_error0(m->get_hobj(), m->get_reqid())) {
+    // Fail retried write with error
+    dout(0) << __func__ << " Error inject - Fail retried write with EINVAL" << dendl;
+    osd->reply_op_error(op, -EINVAL);
+    return;
+  }
+
   ObjectContextRef obc;
   bool can_create = op->may_write();
   hobject_t missing_oid;
@@ -2314,11 +2336,13 @@ void PrimaryLogPG::do_op(OpRequestRef& op)
       dout(20) << __func__
                << ": unstable write on replica, bouncing to primary "
 	       << *m << dendl;
+      osd->logger->inc(l_osd_replica_read_redirect_conflict);
       osd->reply_op_error(op, -EAGAIN);
       return;
     }
     dout(20) << __func__ << ": serving replica read on oid " << oid
              << dendl;
+    osd->logger->inc(l_osd_replica_read_served);
   }
 
   int r = find_object_context(
@@ -4443,7 +4467,7 @@ void PrimaryLogPG::log_op_stats(const OpRequest& op,
 	   << " lat " << latency << dendl;
 
   if (m_dynamic_perf_stats.is_enabled()) {
-    m_dynamic_perf_stats.add(osd, info, op, inb, outb, latency);
+    m_dynamic_perf_stats.add(osd->get_nodeid(), info, op, inb, outb, latency);
   }
 }
 
@@ -4473,7 +4497,7 @@ void PrimaryLogPG::do_scan(
     {
       auto dpp = get_dpp();
       if (osd->check_backfill_full(dpp)) {
-	dout(1) << __func__ << ": Canceling backfill: Full." << dendl;
+	dout(1) << __func__ << ": Suspending backfill: Full." << dendl;
 	queue_peering_event(
 	  PGPeeringEventRef(
 	    std::make_shared<PGPeeringEvent>(
@@ -4530,7 +4554,7 @@ void PrimaryLogPG::do_scan(
       } else {
 	// we canceled backfill for a while due to a too full, and this
 	// is an extra response from a non-too-full peer
-	dout(20) << __func__ << " canceled backfill (too full?)" << dendl;
+	dout(20) << __func__ << " suspended backfill (too full?)" << dendl;
       }
     }
     break;
@@ -5786,10 +5810,19 @@ int PrimaryLogPG::do_extent_cmp(OpContext *ctx, OSDOp& osd_op)
 
 int PrimaryLogPG::finish_extent_cmp(OSDOp& osd_op, const bufferlist &read_bl)
 {
-  for (uint64_t idx = 0; idx < osd_op.indata.length(); ++idx) {
-    char read_byte = (idx < read_bl.length() ? read_bl[idx] : 0);
-    if (osd_op.indata[idx] != read_byte) {
-        return (-MAX_ERRNO - idx);
+  auto input_iter = osd_op.indata.begin();
+  auto read_iter = read_bl.begin();
+  uint64_t idx = 0;
+
+  while (input_iter != osd_op.indata.end()) {
+    char read_byte = (read_iter != read_bl.end() ? *read_iter : 0);
+    if (*input_iter != read_byte) {
+      return (-MAX_ERRNO - idx);
+    }
+    ++idx;
+    ++input_iter;
+    if (read_iter != read_bl.end()) {
+      ++read_iter;
     }
   }
 
@@ -5994,7 +6027,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
   object_info_t& oi = obs.oi;
   const hobject_t& soid = oi.soid;
   const bool skip_data_digest = osd->store->has_builtin_csum() &&
-    osd->osd_skip_data_digest;
+    *osd->osd_skip_data_digest;
 
   PGTransaction* t = ctx->op_t.get();
 
@@ -6057,9 +6090,9 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
     // munge ZERO -> TRUNCATE?  (don't munge to DELETE or we risk hosing attributes)
     if (op.op == CEPH_OSD_OP_ZERO &&
         obs.exists &&
-        op.extent.offset < static_cast<Option::size_t>(osd->osd_max_object_size) &&
+        op.extent.offset < *osd->osd_max_object_size &&
         op.extent.length >= 1 &&
-        op.extent.length <= static_cast<Option::size_t>(osd->osd_max_object_size) &&
+        op.extent.length <= *osd->osd_max_object_size &&
 	op.extent.offset + op.extent.length >= oi.size) {
       if (op.extent.offset >= oi.size) {
         // no-op
@@ -6769,7 +6802,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	}
 	result = check_offset_and_length(
 	  op.extent.offset, op.extent.length,
-	  static_cast<Option::size_t>(osd->osd_max_object_size), get_dpp());
+	  *osd->osd_max_object_size, get_dpp());
 	if (result < 0)
 	  break;
 
@@ -6826,7 +6859,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	}
 	result = check_offset_and_length(
 	  0, op.extent.length,
-          static_cast<Option::size_t>(osd->osd_max_object_size), get_dpp());
+          *osd->osd_max_object_size, get_dpp());
 	if (result < 0)
 	  break;
 
@@ -6876,7 +6909,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
       { // zero
 	result = check_offset_and_length(
 	  op.extent.offset, op.extent.length,
-          static_cast<Option::size_t>(osd->osd_max_object_size), get_dpp());
+          *osd->osd_max_object_size, get_dpp());
 	if (result < 0)
 	  break;
 
@@ -6941,7 +6974,7 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 
         result = check_offset_and_length(
 	  op.extent.offset, op.extent.length,
-          static_cast<Option::size_t>(osd->osd_max_object_size), get_dpp());
+          *osd->osd_max_object_size, get_dpp());
         if (result < 0)
 	  break;
 
@@ -7755,27 +7788,34 @@ int PrimaryLogPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	bool truncated = false;
 	bufferlist bl;
 	if (oi.is_omap()) {
-	  ObjectMap::ObjectMapIterator iter = osd->store->get_omap_iterator(
-	    ch, ghobject_t(soid)
-	    );
-          if (!iter) {
-            result = -ENOENT;
-            goto fail;
-          }
-	  iter->upper_bound(start_after);
-	  if (filter_prefix > start_after) iter->lower_bound(filter_prefix);
-	  for (num = 0;
-	       iter->valid() &&
-		 iter->key().substr(0, filter_prefix.size()) == filter_prefix;
-	       ++num, iter->next()) {
-	    dout(20) << "Found key " << iter->key() << dendl;
-	    if (num >= max_return ||
-		bl.length() >= cct->_conf->osd_max_omap_bytes_per_request) {
-	      truncated = true;
-	      break;
-	    }
-	    encode(iter->key(), bl);
-	    encode(iter->value(), bl);
+	  using omap_iter_seek_t = ObjectStore::omap_iter_seek_t;
+	  result = osd->store->omap_iterate(
+	    ch, ghobject_t(soid),
+	    // try to seek as many keys-at-once as possible for the sake of performance.
+	    // note complexity should be logarithmic, so seek(n/2) + seek(n/2) is worse
+	    // than just seek(n).
+	    ObjectStore::omap_iter_seek_t{
+	      .seek_position = std::max(start_after, filter_prefix),
+	      .seek_type = filter_prefix > start_after ? omap_iter_seek_t::LOWER_BOUND
+						       : omap_iter_seek_t::UPPER_BOUND
+	    },
+	    [&bl, &truncated, &filter_prefix, &num, max_return,
+	     max_bytes=cct->_conf->osd_max_omap_bytes_per_request]
+	    (std::string_view key, std::string_view value) mutable {
+	      if (key.substr(0, filter_prefix.size()) != filter_prefix) {
+	        return ObjectStore::omap_iter_ret_t::STOP;
+	      }
+	      if (num >= max_return || bl.length() >= max_bytes) {
+	        truncated = true;
+	        return ObjectStore::omap_iter_ret_t::STOP;
+	      }
+	      encode(key, bl);
+	      encode(value, bl);
+	      ++num;
+	      return ObjectStore::omap_iter_ret_t::NEXT;
+	    });
+	  if (result < 0) {
+	    goto fail;
 	  }
 	} // else return empty out_set
 	encode(num, osd_op.outdata);
@@ -11491,7 +11531,7 @@ void PrimaryLogPG::issue_repop(RepGather *repop, OpContext *ctx)
     ctx->at_version,
     std::move(ctx->op_t),
     recovery_state.get_pg_trim_to(),
-    recovery_state.get_min_last_complete_ondisk(),
+    recovery_state.get_pg_committed_to(),
     std::move(ctx->log),
     ctx->updated_hset_history,
     on_all_commit,
@@ -11623,7 +11663,7 @@ void PrimaryLogPG::submit_log_entries(
       eversion_t old_last_update = info.last_update;
       recovery_state.merge_new_log_entries(
 	entries, t, recovery_state.get_pg_trim_to(),
-	recovery_state.get_min_last_complete_ondisk());
+	recovery_state.get_pg_committed_to());
 
       set<pg_shard_t> waiting_on;
       for (set<pg_shard_t>::const_iterator i = get_acting_recovery_backfill().begin();
@@ -11643,7 +11683,7 @@ void PrimaryLogPG::submit_log_entries(
 	    get_last_peering_reset(),
 	    repop->rep_tid,
 	    recovery_state.get_pg_trim_to(),
-	    recovery_state.get_min_last_complete_ondisk());
+	    recovery_state.get_pg_committed_to());
 	  osd->send_message_osd_cluster(
 	    peer.osd, m, get_osdmap_epoch());
 	  waiting_on.insert(peer);
@@ -12644,17 +12684,18 @@ void PrimaryLogPG::do_update_log_missing(OpRequestRef &op)
     op->get_req());
   ceph_assert(m->get_type() == MSG_OSD_PG_UPDATE_LOG_MISSING);
   ObjectStore::Transaction t;
-  std::optional<eversion_t> op_trim_to, op_roll_forward_to;
+  std::optional<eversion_t> op_trim_to, op_pg_committed_to;
   if (m->pg_trim_to != eversion_t())
     op_trim_to = m->pg_trim_to;
-  if (m->pg_roll_forward_to != eversion_t())
-    op_roll_forward_to = m->pg_roll_forward_to;
+  if (m->pg_committed_to != eversion_t())
+    op_pg_committed_to = m->pg_committed_to;
 
   dout(20) << __func__
-	   << " op_trim_to = " << op_trim_to << " op_roll_forward_to = " << op_roll_forward_to << dendl;
+	   << " op_trim_to = " << op_trim_to << " op_pg_committed_to = "
+	   << op_pg_committed_to << dendl;
 
   recovery_state.append_log_entries_update_missing(
-    m->entries, t, op_trim_to, op_roll_forward_to);
+    m->entries, t, op_trim_to, op_pg_committed_to);
   eversion_t new_lcod = info.last_complete;
 
   Context *complete = new LambdaContext(

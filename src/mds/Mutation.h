@@ -16,27 +16,28 @@
 #define CEPH_MDS_MUTATION_H
 
 #include <optional>
+#include <unordered_map>
 
 #include "include/interval_set.h"
 #include "include/elist.h"
 #include "include/filepath.h"
 
-#include "MDSCacheObject.h"
 #include "MDSContext.h"
 
 #include "SimpleLock.h"
 #include "Capability.h"
-#include "BatchOp.h"
 
+#include "common/StackStringStream.h"
 #include "common/TrackedOp.h"
 #include "messages/MClientRequest.h"
 #include "messages/MMDSPeerRequest.h"
-#include "messages/MClientReply.h"
 
 class LogSegment;
+class BatchOp;
 class CInode;
 class CDir;
 class CDentry;
+class MDSCacheObject;
 class Session;
 class ScatterLock;
 struct sr_t;
@@ -249,7 +250,7 @@ public:
   // flag mutation as peer
   mds_rank_t peer_to_mds = MDS_RANK_NONE;  // this is a peer request if >= 0.
 
-  ceph::unordered_map<MDSCacheObject*, ObjectState> object_states;
+  std::unordered_map<MDSCacheObject*, ObjectState> object_states;
   int num_pins = 0;
   int num_auth_pins = 0;
   int num_remote_auth_pins = 0;
@@ -487,6 +488,9 @@ struct MDRequestImpl : public MutationImpl {
 
   // indicator for vxattr osdmap update
   bool waited_for_osdmap = false;
+
+  // referent straydn
+  bool referent_straydn = false;
 
 protected:
   void _dump(ceph::Formatter *f) const override {

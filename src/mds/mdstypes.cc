@@ -4,9 +4,11 @@
 #include "mdstypes.h"
 #include "include/cephfs/types.h"
 #include "MDSContext.h"
+#include "common/ceph_json.h"
 #include "common/Formatter.h"
 #include "common/StackStringStream.h"
 
+#include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -1041,4 +1043,9 @@ void snaprealm_reconnect_t::generate_test_instances(std::list<snaprealm_reconnec
   ls.back()->realm.ino = 0x10000000001ULL;
   ls.back()->realm.seq = 2;
   ls.back()->realm.parent = 1;
+}
+
+void EstimatedReplayTime::print(std::ostream& out) {
+  out << "replay: " << percent_complete << "% complete - elapsed time: "
+      << elapsed_time << ", estimated time remaining: " << estimated_time;
 }

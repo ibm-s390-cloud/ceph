@@ -14,6 +14,7 @@
 #include "common/debug.h"
 #include "common/errno.h"
 #include "common/Formatter.h"
+#include "common/safe_io.h" // for safe_read()
 #include "common/TextTable.h"
 #include "common/Throttle.h"
 #include "global/global_context.h"
@@ -355,6 +356,10 @@ protected:
   virtual ~ImageRequestBase() {
   }
 
+  virtual bool open_read_only() const {
+    return false;
+  }
+
   virtual bool skip_get_info() const {
     return false;
   }
@@ -429,8 +434,13 @@ private:
     librbd::RBD rbd;
     auto aio_completion = utils::create_aio_completion<
       ImageRequestBase, &ImageRequestBase::handle_open_image>(this);
-    rbd.aio_open(m_io_ctx, m_image, m_image_name.c_str(), nullptr,
-                 aio_completion);
+    if (open_read_only()) {
+      rbd.aio_open_read_only(m_io_ctx, m_image, m_image_name.c_str(), nullptr,
+                             aio_completion);
+    } else {
+      rbd.aio_open(m_io_ctx, m_image, m_image_name.c_str(), nullptr,
+                   aio_completion);
+    }
   }
 
   void handle_open_image(int r) {
@@ -604,6 +614,10 @@ public:
   }
 
 protected:
+  bool open_read_only() const override {
+    return true;
+  }
+
   bool skip_get_info() const override {
     return true;
   }
@@ -1241,7 +1255,7 @@ void get_enable_arguments(po::options_description *positional,
                           po::options_description *options) {
   at::add_pool_options(positional, options, true);
   positional->add_options()
-    ("mode", "mirror mode [image or pool]");
+    ("mode", "mirror mode [image, pool or init-only]");
   add_site_name_optional(options);
 
   options->add_options()
@@ -1329,8 +1343,10 @@ int execute_enable(const po::variables_map &vm,
     mirror_mode = RBD_MIRROR_MODE_IMAGE;
   } else if (mode == "pool") {
     mirror_mode = RBD_MIRROR_MODE_POOL;
+  } else if (mode == "init-only") {
+    mirror_mode = RBD_MIRROR_MODE_INIT_ONLY;
   } else {
-    std::cerr << "rbd: must specify 'image' or 'pool' mode." << std::endl;
+    std::cerr << "rbd: mirror mode was not specified" << std::endl;
     return -EINVAL;
   }
 
@@ -1343,26 +1359,34 @@ int execute_enable(const po::variables_map &vm,
   }
 
   if (vm.count(REMOTE_NAMESPACE_NAME)) {
+    if (mirror_mode == RBD_MIRROR_MODE_INIT_ONLY) {
+      std::cerr << "rbd: cannot specify remote namespace for init-only mode"
+                << std::endl;
+      return -EINVAL;
+    }
     remote_namespace = vm[REMOTE_NAMESPACE_NAME].as<std::string>();
   } else {
     remote_namespace = namespace_name;
   }
 
-  std::string original_remote_namespace;
   librbd::RBD rbd;
-  r = rbd.mirror_remote_namespace_get(io_ctx, &original_remote_namespace);
-  if (r < 0) {
-    std::cerr << "rbd: failed to get the current remote namespace."
-              << std::endl;
-    return r;
-  }
 
-  if (original_remote_namespace != remote_namespace) {
-    r = rbd.mirror_remote_namespace_set(io_ctx, remote_namespace);
+  if (mirror_mode != RBD_MIRROR_MODE_INIT_ONLY) {
+    std::string original_remote_namespace;
+    r = rbd.mirror_remote_namespace_get(io_ctx, &original_remote_namespace);
     if (r < 0) {
-      std::cerr << "rbd: failed to set the remote namespace."
-                << std::endl;
+      std::cerr << "rbd: failed to get the current remote namespace."
+	        << std::endl;
       return r;
+    }
+
+    if (original_remote_namespace != remote_namespace) {
+      r = rbd.mirror_remote_namespace_set(io_ctx, remote_namespace);
+      if (r < 0) {
+        std::cerr << "rbd: failed to set the remote namespace."
+                  << std::endl;
+	return r;
+      }
     }
   }
 
@@ -1457,6 +1481,9 @@ int execute_info(const po::variables_map &vm,
     break;
   case RBD_MIRROR_MODE_POOL:
     mirror_mode_desc = "pool";
+    break;
+  case RBD_MIRROR_MODE_INIT_ONLY:
+    mirror_mode_desc = "init-only";
     break;
   default:
     mirror_mode_desc = "unknown";
@@ -1632,11 +1659,8 @@ int execute_status(const po::variables_map &vm,
     }
 
     // dump per-image status
-    librados::IoCtx default_ns_io_ctx;
-    default_ns_io_ctx.dup(io_ctx);
-    default_ns_io_ctx.set_namespace("");
     std::vector<librbd::mirror_peer_site_t> mirror_peers;
-    utils::get_mirror_peer_sites(default_ns_io_ctx, &mirror_peers);
+    utils::get_mirror_peer_sites(io_ctx, &mirror_peers);
 
     std::map<std::string, std::string> peer_mirror_uuids_to_name;
     utils::get_mirror_peer_mirror_uuids_to_names(mirror_peers,

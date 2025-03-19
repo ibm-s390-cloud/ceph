@@ -46,6 +46,7 @@ add_executable(crimson-osd
   ${PROJECT_SOURCE_DIR}/src/objclass/class_api.cc
   ${PROJECT_SOURCE_DIR}/src/osd/ClassHandler.cc
   ${PROJECT_SOURCE_DIR}/src/osd/ECUtil.cc
+  ${PROJECT_SOURCE_DIR}/src/osd/ECUtilL.cc
   ${PROJECT_SOURCE_DIR}/src/osd/osd_op_util.cc
   ${PROJECT_SOURCE_DIR}/src/osd/OSDCap.cc
   ${PROJECT_SOURCE_DIR}/src/osd/PeeringState.cc
@@ -56,6 +57,7 @@ add_executable(crimson-osd
   ${PROJECT_SOURCE_DIR}/src/osd/SnapMapper.cc
   ${PROJECT_SOURCE_DIR}/src/osd/recovery_types.cc
   ${PROJECT_SOURCE_DIR}/src/osd/osd_perf_counters.cc
+  ${PROJECT_SOURCE_DIR}/src/mgr/OSDPerfMetricTypes.cc
   watch.cc
   )
 if(HAS_VTA)
