@@ -3,4 +3,4 @@ pyOpenSSL
 cephfs
 ceph-argparse
 pyyaml
-distutils
+python3-setuptools

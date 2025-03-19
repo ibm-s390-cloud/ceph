@@ -49,6 +49,14 @@ ifneq (,$(filter with_system_libs,$(DEB_BUILD_OPTIONS)))
   extraopts += -DWITH_SYSTEM_PMDK=ON
 endif
 
+extraopts += -DWITH_MGR_DASHBOARD_FRONTEND=OFF
+extraopts += -DALLOCATOR=tcmalloc
+extraopts += -DHAVE_SMCD=ON
+extraopts += -DCMAKE_BUILD_TYPE=Release
+extraopts += -DWITH_JAEGER=OFF
+
+export CEPH_OSD_BASENAME=ceph-osd
+
 # for python3-${pkg} packages
 py3_bindings := rados cephfs rbd rgw ceph-argparse ceph-common
 # for packages with its own py3dist-overrides files, those file should be named
@@ -78,6 +86,9 @@ override_dh_auto_install:
 
 	install -m 644 -D monitoring/ceph-mixin/prometheus_alerts.yml $(DESTDIR)/etc/prometheus/ceph/ceph_default_alerts.yml
 	install -m 644 -D monitoring/ceph-mixin/dashboards_out/* ${DESTDIR}/etc/grafana/dashboards/ceph-dashboard
+
+	install -d ${DESTDIR}/lib/systemd/system/
+	install -m 644 -D ${DESTDIR}/usr/lib/systemd/system/* ${DESTDIR}/lib/systemd/system/
 
 # doc/changelog is a directory, which confuses dh_installchangelogs
 override_dh_installchangelogs:
