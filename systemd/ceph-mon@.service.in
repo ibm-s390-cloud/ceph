@@ -16,7 +16,7 @@ ExecStart=@CMAKE_INSTALL_PREFIX@/bin/ceph-mon -f --id %i --setuser ceph --setgro
 LimitNOFILE=1048576
 LimitNPROC=1048576
 LockPersonality=true
-MemoryDenyWriteExecute=true
+#MemoryDenyWriteExecute=true
 # Need NewPrivileges via `sudo smartctl`
 NoNewPrivileges=false
 # We need access to block devices to check the health of the disk backing the
@@ -32,10 +32,10 @@ ProtectKernelModules=true
 ProtectKernelTunables=true
 ProtectSystem=full
 Restart=on-failure
-RestartSec=10
+#RestartSec=10
 RestrictSUIDSGID=true
-StartLimitBurst=5
-StartLimitInterval=30min
+#StartLimitBurst=5
+#StartLimitInterval=30min
 TasksMax=infinity
 
 [Install]

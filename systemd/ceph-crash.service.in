@@ -5,9 +5,9 @@ Description=Ceph crash dump collector
 Type=simple
 ExecStart=@CMAKE_INSTALL_PREFIX@/bin/ceph-crash
 Restart=always
-RestartSec=10
-StartLimitInterval=10min
-StartLimitBurst=10
+#RestartSec=10
+#StartLimitInterval=10min
+#StartLimitBurst=10
 
 [Install]
 WantedBy=ceph.target

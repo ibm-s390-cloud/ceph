@@ -20,10 +20,10 @@ ProtectKernelModules=true
 ProtectKernelTunables=true
 ProtectSystem=full
 Restart=on-failure
-RestartSec=10
+#RestartSec=10
 RestrictSUIDSGID=true
-StartLimitBurst=3
-StartLimitInterval=30min
+#StartLimitBurst=3
+#StartLimitInterval=30min
 
 [Install]
 WantedBy=multi-user.target ceph.target

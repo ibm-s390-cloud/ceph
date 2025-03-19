@@ -9,11 +9,11 @@ Wants=network-online.target local-fs.target time-sync.target remote-fs-pre.targe
 EnvironmentFile=-@SYSTEMD_ENV_FILE@
 ExecReload=/bin/kill -HUP $MAINPID
 ExecStart=@CMAKE_INSTALL_PREFIX@/bin/ceph-osd -f --id %i --setuser ceph --setgroup ceph
-ExecStartPre=@CMAKE_INSTALL_FULL_LIBEXECDIR@/ceph/ceph-osd-prestart.sh --id %i
+#ExecStartPre=@CMAKE_INSTALL_FULL_LIBEXECDIR@/ceph/ceph-osd-prestart.sh --id %i
 LimitNOFILE=1048576
 LimitNPROC=1048576
 LockPersonality=true
-MemoryDenyWriteExecute=true
+#MemoryDenyWriteExecute=true
 # Need NewPrivileges via `sudo smartctl`
 NoNewPrivileges=false
 PrivateTmp=true
@@ -26,10 +26,10 @@ ProtectKernelModules=true
 ProtectKernelTunables=false
 ProtectSystem=full
 Restart=on-failure
-RestartSec=10
+#RestartSec=10
 RestrictSUIDSGID=true
-StartLimitBurst=3
-StartLimitInterval=30min
+#StartLimitBurst=3
+#StartLimitInterval=30min
 TasksMax=infinity
 
 [Install]
