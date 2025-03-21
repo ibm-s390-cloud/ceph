@@ -5,6 +5,9 @@
 #include "tools/rbd/Shell.h"
 #include "tools/rbd/Utils.h"
 #include "common/errno.h"
+#include "common/ceph_mutex.h"
+#include "common/config_proxy.h"
+#include "global/global_context.h"
 #include <iostream>
 #include <boost/program_options.hpp>
 
