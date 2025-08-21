@@ -44,12 +44,6 @@ if(HAVE_RDMA)
     async/rdma/RDMAStack.cc)
 endif()
 
-if(HAVE_SMCD)
-  list(APPEND msg_srcs
-    async/smcd/SMCDStack.cc
-    async/smcd/SMCDNetHandler.cc)
-endif()
-
 add_library(common-msg-objs OBJECT ${msg_srcs})
 target_compile_definitions(common-msg-objs PRIVATE
   $<TARGET_PROPERTY:${FMT_LIB},INTERFACE_COMPILE_DEFINITIONS>)
