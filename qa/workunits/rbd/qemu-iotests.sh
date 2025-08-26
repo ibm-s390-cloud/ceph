@@ -11,7 +11,7 @@ git clone https://github.com/qemu/qemu.git
 cd qemu
 
 
-if grep -iqE '(bionic|focal|jammy|platform:el9)' /etc/os-release; then
+if grep -iqE '(bionic|focal|jammy|noble|platform:el9)' /etc/os-release; then
     git checkout v2.11.0
 elif grep -iqE '(xenial|platform:el8)' /etc/os-release; then
     git checkout v2.3.0
