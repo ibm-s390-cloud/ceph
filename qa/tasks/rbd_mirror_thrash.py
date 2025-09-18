@@ -75,9 +75,9 @@ class RBDMirrorThrasher(Thrasher, Greenlet):
 
         self.randomize = bool(self.config.get('randomize', True))
         self.max_thrash = int(self.config.get('max_thrash', 1))
-        self.min_thrash_delay = float(self.config.get('min_thrash_delay', 60.0))
-        self.max_thrash_delay = float(self.config.get('max_thrash_delay', 120.0))
-        self.max_revive_delay = float(self.config.get('max_revive_delay', 10.0))
+        self.min_thrash_delay = float(self.config.get('min_thrash_delay', 600.0))
+        self.max_thrash_delay = float(self.config.get('max_thrash_delay', 1200.0))
+        self.max_revive_delay = float(self.config.get('max_revive_delay', 100.0))
 
     def _run(self):
         try:
