@@ -41,7 +41,7 @@ function rebuild()
   rbd create $out --size 1 --object-size 524288
   mkdir -p mnt diffs
   # lttng has atexit handlers that need to be fork/clone aware
-  LD_PRELOAD=liblttng-ust-fork.so.0 rbd-fuse -p $pool mnt
+  LD_PRELOAD=liblttng-ust-fork.so.1 rbd-fuse -p $pool mnt
 }
 
 function write()
