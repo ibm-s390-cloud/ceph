@@ -146,4 +146,6 @@ for conf_rbd_cache in false true; do
     rbd_watch_end ${image}
 done
 
+sleep 60
+
 rbd rm ${image}
