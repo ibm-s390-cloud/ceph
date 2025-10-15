@@ -50,12 +50,12 @@ class CBTperformance:
                     "benchmark" : benchmark["benchmarks"],
                     "results" : cbt_results.get("results", None),
                 }
-                response = requests.post(self.endpoint_url, json=data, headers=self.headers, auth=self.auth)
-                if response.status_code == 201:
-                    self.log.info("Data inserted successfully.")
-                    ctx.summary['cbt_perf_url'] = self.create_cbt_perf_url(ctx, config)
-                else:
-                    self.log.info(f"Error inserting data: {response}")
+                #response = requests.post(self.endpoint_url, json=data, headers=self.headers, auth=self.auth)
+                #if response.status_code == 201:
+                #    self.log.info("Data inserted successfully.")
+                #    ctx.summary['cbt_perf_url'] = self.create_cbt_perf_url(ctx, config)
+                #else:
+                #    self.log.info(f"Error inserting data: {response}")
 
 
     def read_results(self, ctx, config):

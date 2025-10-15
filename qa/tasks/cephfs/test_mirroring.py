@@ -697,7 +697,7 @@ class TestMirroring(CephFSTestCase):
         # take a snapshot
         self.mount_a.run_shell(["mkdir", "d0/.snap/snap0"])
 
-        time.sleep(10)
+        time.sleep(100)
         self.check_peer_snap_in_progress(self.primary_fs_name, self.primary_fs_id,
                                          "client.mirror_remote@ceph", '/d0', 'snap0')
 
