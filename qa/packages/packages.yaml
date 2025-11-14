@@ -19,22 +19,22 @@ ceph:
   - librados2
   - librbd1
   - rbd-fuse
-  - ceph-common-dbg
-  - ceph-fuse-dbg
-  - ceph-mds-dbg
-  - ceph-mgr-dbg
-  - ceph-mon-dbg
-  - ceph-osd-dbg
-  - ceph-test-dbg
-  - libcephfs2-dbg
-  - librados2-dbg
-  - libradosstriper1-dbg
-  - librbd1-dbg
-  - librgw2-dbg
-  - radosgw-dbg
-  - rbd-fuse-dbg
-  - rbd-mirror-dbg
-  - rbd-nbd-dbg
+  - ceph-common-dbgsym
+  - ceph-fuse-dbgsym
+  - ceph-mds-dbgsym
+  - ceph-mgr-dbgsym
+  - ceph-mon-dbgsym
+  - ceph-osd-dbgsym
+  - ceph-test-dbgsym
+  - libcephfs2-dbgsym
+  - librados2-dbgsym
+  - libradosstriper1-dbgsym
+  - librbd1-dbgsym
+  - librgw2-dbgsym
+  - radosgw-dbgsym
+  - rbd-fuse-dbgsym
+  - rbd-mirror-dbgsym
+  - rbd-nbd-dbgsym
   rpm:
   - ceph-radosgw
   - ceph-test
