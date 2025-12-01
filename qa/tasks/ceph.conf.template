@@ -1,4 +1,5 @@
 [global]
+    ms_type=async+smc
 	chdir = ""
 	pid file = /var/run/ceph/$cluster-$name.pid
         auth supported = cephx
