@@ -1459,12 +1459,14 @@ class RgwZonegroup(RESTController):
         result = multisite_instance.get_all_zonegroups_info()
         return result
 
-    def delete(self, zonegroup_name, delete_pools, pools: Optional[List[str]] = None):
+    def delete(self, zonegroup_name, delete_pools, pools: Optional[List[str]] = None,
+               realm_name: Optional[str] = None):
         if pools is None:
             pools = []
         try:
             multisite_instance = RgwMultisite()
-            result = multisite_instance.delete_zonegroup(zonegroup_name, delete_pools, pools)
+            result = multisite_instance.delete_zonegroup(zonegroup_name, delete_pools,
+                                                         pools, realm_name)
             return result
         except NoRgwDaemonsException as e:
             raise DashboardException(e, http_status_code=404, component='rgw')
@@ -1516,14 +1518,16 @@ class RgwZone(RESTController):
         return result
 
     def delete(self, zone_name, delete_pools, pools: Optional[List[str]] = None,
-               zonegroup_name=None):
+               zonegroup_name=None, realm_name: Optional[str] = None):
         if pools is None:
             pools = []
         if zonegroup_name is None:
             zonegroup_name = ''
         try:
             multisite_instance = RgwMultisite()
-            result = multisite_instance.delete_zone(zone_name, delete_pools, pools, zonegroup_name)
+            result = multisite_instance.delete_zone(zone_name, delete_pools,
+                                                    pools, zonegroup_name,
+                                                    realm_name)
             return result
         except NoRgwDaemonsException as e:
             raise DashboardException(e, http_status_code=404, component='rgw')
@@ -1568,6 +1572,57 @@ class RgwZone(RESTController):
         multisite_instance = RgwMultisite()
         result = multisite_instance.get_user_list(zoneName, realmName)
         return result
+
+    @Endpoint('POST', path='storage-class')
+    @CreatePermission
+    def create_storage_class(self, zone_name: str, placement_target: str, storage_class: str,
+                             data_pool: str, compression=''):
+        return self.handle_storage_class(zone_name, placement_target, storage_class, data_pool,
+                                         operation='create', compression=compression)
+
+    @Endpoint('PUT', path='storage-class')
+    @CreatePermission
+    def edit_storage_class(self, zone_name: str, placement_target: str, storage_class: str,
+                           data_pool: str, compression=''):
+        return self.handle_storage_class(zone_name, placement_target, storage_class, data_pool,
+                                         operation='edit', compression=compression)
+
+    def handle_storage_class(self, zone_name: str, placement_target: str, storage_class: str,
+                             data_pool: str, operation: str, compression=''):
+        if not (placement_target and storage_class and data_pool):
+            raise DashboardException(
+                msg='Failed to get placement target',
+                http_status_code=404,
+                component='rgw'
+            )
+        multisite_instance = RgwMultisite()
+
+        try:
+            if operation == 'create':
+                multisite_instance.add_storage_class_zone(
+                    zone_name=zone_name,
+                    placement_target=placement_target,
+                    storage_class=storage_class,
+                    data_pool=data_pool,
+                    compression=compression
+                )
+            elif operation == 'edit':
+                multisite_instance.edit_storage_class_zone(
+                    zone_name=zone_name,
+                    placement_target=placement_target,
+                    storage_class=storage_class,
+                    data_pool=data_pool,
+                    compression=compression
+                )
+        except DashboardException as e:
+            raise DashboardException(e, http_status_code=404, component='rgw')
+
+        return {
+            'placement_target': placement_target,
+            'storage_class': storage_class,
+            'data_pool': data_pool,
+            'status': 'success'
+        }
 
 
 @APIRouter('/rgw/topic', Scope.RGW)

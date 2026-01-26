@@ -1199,6 +1199,10 @@ int RGWRados::register_to_service_map(const DoutPrefixProvider *dpp, const strin
   metadata["realm_name"] = svc.zone->get_realm().get_name();
   metadata["realm_id"] = svc.zone->get_realm().get_id();
   metadata["id"] = name;
+  auto service_unique_id = cct->_conf.get_val<std::string>("service_unique_id");
+  if (!service_unique_id.empty()) {
+    metadata["service_unique_id"] = std::move(service_unique_id);
+  }
   int ret = rados.service_daemon_register(
     daemon_type,
     stringify(rados.get_instance_id()),
@@ -5482,6 +5486,7 @@ int RGWRados::restore_obj_from_cloud(RGWLCCloudTierCtx& tier_ctx,
     ret = rgw_cloud_tier_get_object(tier_ctx, false,  headers,
                                 &set_mtime, etag, accounted_size,
                                 attrs, &cb);
+    in_progress = false;
   }
 
   if (ret < 0) { 
@@ -5547,22 +5552,17 @@ int RGWRados::restore_obj_from_cloud(RGWLCCloudTierCtx& tier_ctx,
 
   real_time delete_at = real_time();
   if (days) { //temp copy; do not change mtime and set expiry date
-    int expiry_days = days.value();
-    constexpr int32_t secs_in_a_day = 24 * 60 * 60;
     ceph::real_time expiration_date ;
+    (void)restore->get_expiration_date(dpp, days.value(), expiration_date);
 
-    if (cct->_conf->rgw_restore_debug_interval > 0) {
-      expiration_date = restore_time + make_timespan(double(expiry_days)*cct->_conf->rgw_restore_debug_interval);
-      ldpp_dout(dpp, 20) << "Setting expiration time to rgw_restore_debug_interval: " << double(expiry_days)*cct->_conf->rgw_restore_debug_interval << ", days:" << expiry_days << dendl;
-    } else {
-        expiration_date = restore_time + make_timespan(double(expiry_days) * secs_in_a_day);
-    }
     delete_at = expiration_date;
 
+    ldpp_dout(dpp, 5) << "Setting Restore expiration time to: " << expiration_date << " , restore_time: " << restore_time << ", restore_interval: " << cct->_conf->rgw_restore_debug_interval  << dendl;
     {
       bufferlist bl;
       encode(expiration_date, bl);
       attrs[RGW_ATTR_RESTORE_EXPIRY_DATE] = std::move(bl);
+      attrs[RGW_ATTR_DELETE_AT] = attrs[RGW_ATTR_RESTORE_EXPIRY_DATE];
     }
     {
       bufferlist bl;
@@ -6350,7 +6350,8 @@ struct tombstone_entry {
 int RGWRados::Object::Delete::delete_obj(optional_yield y,
 					 const DoutPrefixProvider* dpp,
 					 bool log_op,
-					 const bool force)
+					 const bool force,
+					 const bool skip_olh_obj_update)
 {
   RGWRados *store = target->get_store();
   const rgw_obj& src_obj = target->get_obj();
@@ -6397,7 +6398,7 @@ int RGWRados::Object::Delete::delete_obj(optional_yield y,
 
       int r = store->set_olh(dpp, target->get_ctx(), target->get_bucket_info(), marker, true,
                              &meta, params.olh_epoch, params.unmod_since, params.high_precision_time,
-                             y, params.zones_trace, add_log);
+                             y, params.zones_trace, add_log, skip_olh_obj_update);
       if (r < 0) {
         return r;
       }
@@ -6412,7 +6413,7 @@ int RGWRados::Object::Delete::delete_obj(optional_yield y,
       r = store->unlink_obj_instance(
 	dpp, target->get_ctx(), target->get_bucket_info(), obj,
 	params.olh_epoch, y, params.bilog_flags,
-	params.null_verid, params.zones_trace, add_log, force);
+	params.null_verid, params.zones_trace, add_log, force, skip_olh_obj_update);
       if (r < 0) {
         return r;
       }
@@ -6590,7 +6591,8 @@ int RGWRados::delete_obj(const DoutPrefixProvider *dpp,
                          const real_time& expiration_time,
                          rgw_zone_set *zones_trace,
                          bool log_op,
-                         const bool force) // force removal even if head object is broken
+                         const bool force, // force removal even if head object is broken
+                         const bool skip_olh_obj_update) // true for all deletes (except the last one) initiated by a multi-object delete op
 {
   RGWRados::Object del_target(this, bucket_info, obj_ctx, obj);
   RGWRados::Object::Delete del_op(&del_target);
@@ -6602,7 +6604,7 @@ int RGWRados::delete_obj(const DoutPrefixProvider *dpp,
   del_op.params.zones_trace = zones_trace;
   del_op.params.null_verid = null_verid;
 
-  return del_op.delete_obj(y, dpp, log_op, force);
+  return del_op.delete_obj(y, dpp, log_op, force, skip_olh_obj_update);
 }
 
 int RGWRados::delete_raw_obj(const DoutPrefixProvider *dpp, const rgw_raw_obj& obj, optional_yield y)
@@ -7315,9 +7317,10 @@ int RGWRados::set_attrs(const DoutPrefixProvider *dpp, RGWObjectCtx* octx, RGWBu
       int64_t poolid = ioctx.get_id();
 
       // Retain Object category as CloudTiered while restore is in
-      // progress or failed
+      // progress or failed or if its temporarily restored copy
       RGWObjCategory category = RGWObjCategory::Main;
       auto r_iter = attrs.find(RGW_ATTR_RESTORE_STATUS);
+      auto t_iter = attrs.find(RGW_ATTR_RESTORE_TYPE);
       if (r_iter != attrs.end()) {
         rgw::sal::RGWRestoreStatus st = rgw::sal::RGWRestoreStatus::None;
         auto iter = r_iter->second.cbegin();
@@ -7328,10 +7331,26 @@ int RGWRados::set_attrs(const DoutPrefixProvider *dpp, RGWObjectCtx* octx, RGWBu
 
           if (st != rgw::sal::RGWRestoreStatus::CloudRestored) {
             category = RGWObjCategory::CloudTiered;
+          } else { // check if its temporary copy
+            if (t_iter != attrs.end()) {
+              rgw::sal::RGWRestoreType rt;
+              decode(rt, t_iter->second);
+
+              if (rt == rgw::sal::RGWRestoreType::Temporary) {
+                category = RGWObjCategory::CloudTiered;
+                // temporary restore; set storage-class to cloudtier storage class
+                auto c_iter = attrs.find(RGW_ATTR_CLOUDTIER_STORAGE_CLASS);
+
+                if (c_iter != attrs.end()) {
+                  storage_class = rgw_bl_str(c_iter->second);
+                }
+              }
+            }
           }
         } catch (buffer::error& err) {
         }
       }
+	    ldpp_dout(dpp, 20) << "Setting obj category:" << category << ", storage_class:" << storage_class << dendl;
       r = index_op.complete(dpp, poolid, epoch, state->size, state->accounted_size,
                             mtime, etag, content_type, storage_class, owner,
                             category, nullptr, y, nullptr, false, log_op);
@@ -9055,7 +9074,7 @@ int RGWRados::apply_olh_log(const DoutPrefixProvider *dpp,
     rgw_obj obj_instance(bucket, key);
     int ret = delete_obj(dpp, obj_ctx, bucket_info, obj_instance, 0, y,
 			 null_verid, RGW_BILOG_FLAG_VERSIONED_OP,
-			 ceph::real_time(), zones_trace, log_op, force);
+			 ceph::real_time(), zones_trace, log_op, force, true /* skip_olh_obj_update */);
     if (ret < 0 && ret != -ENOENT) {
       ldpp_dout(dpp, 0) << "ERROR: delete_obj() returned " << ret << " obj_instance=" << obj_instance << dendl;
       return ret;
@@ -9249,9 +9268,11 @@ int RGWRados::set_olh(const DoutPrefixProvider *dpp, RGWObjectCtx& obj_ctx,
       // it's possible that the pending xattr from this op prevented the olh
       // object from being cleaned by another thread that was deleting the last
       // existing version. We invoke a best-effort update_olh here to handle this case.
-      int r = update_olh(dpp, obj_ctx, state, bucket_info, olh_obj, y, zones_trace, log_data_change);
-      if (r < 0 && r != -ECANCELED) {
-        ldpp_dout(dpp, 20) << "update_olh() target_obj=" << olh_obj << " returned " << r << dendl;
+      if (! skip_olh_obj_update) {
+        int r = update_olh(dpp, obj_ctx, state, bucket_info, olh_obj, y, zones_trace, log_data_change);
+        if (r < 0 && r != -ECANCELED) {
+          ldpp_dout(dpp, 20) << "update_olh() target_obj=" << olh_obj << " returned " << r << dendl;
+        }
       }
       return ret;
     }
@@ -9265,6 +9286,7 @@ int RGWRados::set_olh(const DoutPrefixProvider *dpp, RGWObjectCtx& obj_ctx,
 
   // exit early if we're skipping the olh update and just updating the index
   if (skip_olh_obj_update) {
+    ldpp_dout(dpp, 20) << "skip update_olh() target_obj=" << olh_obj << dendl;
     return 0;
   }
 
@@ -9290,7 +9312,8 @@ int RGWRados::unlink_obj_instance(const DoutPrefixProvider* dpp,
 				  bool null_verid,
 				  rgw_zone_set* zones_trace,
 				  bool log_op,
-				  const bool force)
+				  const bool force,
+				  const bool skip_olh_obj_update)
 {
   string op_tag;
 
@@ -9348,10 +9371,12 @@ int RGWRados::unlink_obj_instance(const DoutPrefixProvider* dpp,
       // it's possible that the pending xattr from this op prevented the olh
       // object from being cleaned by another thread that was deleting the last
       // existing version. We invoke a best-effort update_olh here to handle this case.
-      int r = update_olh(dpp, obj_ctx, state, bucket_info, olh_obj, y,
-			 zones_trace, null_verid, log_op, force);
-      if (r < 0 && r != -ECANCELED) {
-        ldpp_dout(dpp, 20) << "update_olh() target_obj=" << olh_obj << " returned " << r << dendl;
+      if (! skip_olh_obj_update) {
+        int r = update_olh(dpp, obj_ctx, state, bucket_info, olh_obj, y,
+                           zones_trace, null_verid, log_op, force);
+        if (r < 0 && r != -ECANCELED) {
+          ldpp_dout(dpp, 20) << "update_olh() target_obj=" << olh_obj << " returned " << r << dendl;
+        }
       }
       return ret;
     } // if error in bucket_index_unlink_instance call
@@ -9361,6 +9386,11 @@ int RGWRados::unlink_obj_instance(const DoutPrefixProvider* dpp,
   if (i == MAX_ECANCELED_RETRY) {
     ldpp_dout(dpp, 0) << "ERROR: exceeded max ECANCELED retries, aborting (EIO)" << dendl;
     return -EIO;
+  }
+
+  if (skip_olh_obj_update) {
+    ldpp_dout(dpp, 20) << "skip update_olh() target_obj=" << olh_obj << dendl;
+    return 0;
   }
 
   ret = update_olh(dpp, obj_ctx, state, bucket_info, olh_obj, y,
@@ -10961,8 +10991,11 @@ int RGWRados::remove_objs_from_index(const DoutPrefixProvider *dpp,
   std::map<int, std::set<std::string>> sharded_removals;
   for (const auto& entry_key : entry_key_list) {
     const rgw_obj_key obj_key(entry_key);
-    const uint32_t shard =
-      RGWSI_BucketIndex_RADOS::bucket_shard_index(obj_key, num_shards);
+    const uint32_t shard = [&obj_key, num_shards]() -> uint32_t {
+      int32_t temp = RGWSI_BucketIndex_RADOS::bucket_shard_index(obj_key, num_shards);
+      return (-1 == temp) ? 0 : (uint32_t) temp;
+    }();
+
 
     // entry_key already combines namespace and name, so we first have
     // to break that apart before we can then combine with instance

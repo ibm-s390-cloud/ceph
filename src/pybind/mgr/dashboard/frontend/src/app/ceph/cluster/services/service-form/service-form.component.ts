@@ -1166,7 +1166,7 @@ export class ServiceFormComponent extends CdForm implements OnInit {
 
     const serviceId: string = values['service_id'];
     let serviceName: string = serviceType;
-    if (_.isString(serviceId) && !_.isEmpty(serviceId) && serviceId !== serviceType) {
+    if (_.isString(serviceId) && !_.isEmpty(serviceId)) {
       serviceName = `${serviceType}.${serviceId}`;
       serviceSpec['service_id'] = serviceId;
     }
@@ -1212,7 +1212,7 @@ export class ServiceFormComponent extends CdForm implements OnInit {
             (serviceSpec['features'] = serviceSpec['features'] || []).push(feature);
           }
         }
-        serviceSpec['custom_dns'] = values['custom_dns']?.trim();
+        serviceSpec['custom_dns'] = values['custom_dns'];
         serviceSpec['join_sources'] = values['join_sources']?.trim();
         serviceSpec['user_sources'] = values['user_sources']?.trim();
         serviceSpec['include_ceph_users'] = values['include_ceph_users']?.trim();
@@ -1313,7 +1313,7 @@ export class ServiceFormComponent extends CdForm implements OnInit {
           serviceSpec['https_address'] = values['https_address']?.trim();
           serviceSpec['redirect_url'] = values['redirect_url']?.trim();
           serviceSpec['allowlist_domains'] = values['allowlist_domains']
-            .split(',')
+            ?.split(',')
             .map((domain: string) => {
               return domain.trim();
             });
