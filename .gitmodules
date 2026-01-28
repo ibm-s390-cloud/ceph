@@ -29,6 +29,7 @@
 [submodule "src/isa-l"]
 	path = src/isa-l
 	url = https://github.com/ceph/isa-l
+	branch = d3cfb2fb772e375cf2007e484e0a6ec0c6a7c993
 [submodule "src/zstd"]
 	path = src/zstd
 	url = https://github.com/facebook/zstd
