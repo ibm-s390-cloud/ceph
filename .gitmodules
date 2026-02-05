@@ -29,7 +29,7 @@
 [submodule "src/isa-l"]
 	path = src/isa-l
 	url = https://github.com/aliakseimakarau/isa-l
-	branch = c387163
+	branch = branch_c387163
 [submodule "src/zstd"]
 	path = src/zstd
 	url = https://github.com/facebook/zstd
