@@ -174,7 +174,7 @@ spdk_crc64_nvme(const void *buf, size_t len, uint64_t crc)
 #else
 
 
-static const u64 ____cacheline_aligned crc64table[256] = {
+static const uint64_t crc64table[256] = {
     0x0000000000000000ULL, 	0x42f0e1eba9ea3693ULL,
     0x85e1c3d753d46d26ULL, 	0xc711223cfa3e5bb5ULL,
     0x493366450e42ecdfULL, 	0x0bc387aea7a8da4cULL,
@@ -317,7 +317,7 @@ crc64_be(uint64_t crc, const uint8_t *p, uint64_t len)
 {
 	uint64_t i, t;
 
-	const unsigned uint8_t *_p = p;
+	const uint8_t *_p = p;
 
 	for (i = 0; i < len; i++) {
 		t = ((crc >> 56) ^ (*_p++)) & 0xFF;
