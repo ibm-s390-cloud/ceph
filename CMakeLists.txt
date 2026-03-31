@@ -251,6 +251,8 @@ if(WITH_BLUESTORE)
   endif()
 endif()
 
+option(WITH_ZSTORE "ZStore OSD backend" ON)
+
 option(WITH_CRIMSON "Build Crimson components" OFF)
 
 if(WITH_BLUESTORE OR WITH_CRIMSON)

@@ -19,6 +19,9 @@
 #include "common/safe_io.h"
 
 #include "memstore/MemStore.h"
+#if defined(WITH_ZSTORE)
+#include "zstore/ZStore.h"
+#endif
 #if defined(WITH_BLUESTORE)
 #include "bluestore/BlueStore.h"
 #endif
@@ -33,6 +36,11 @@ std::unique_ptr<ObjectStore> ObjectStore::create(
   if (type == "memstore") {
     return std::make_unique<MemStore>(cct, data);
   }
+#if defined(WITH_ZSTORE)
+  if (type == "zstore") {
+    return std::make_unique<ZStore>(cct, data);
+  }
+#endif
 #if defined(WITH_BLUESTORE)
   if (type == "bluestore" || type == "random") {
     return std::make_unique<BlueStore>(cct, data);

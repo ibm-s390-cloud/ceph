@@ -11,6 +11,12 @@ add_subdirectory(memstore)
 target_link_libraries(os
   PRIVATE memstore)
 
+if(WITH_ZSTORE)
+  add_subdirectory(zstore)
+  target_link_libraries(os
+    PRIVATE zstore)
+endif()
+
 if(WITH_BLUESTORE)
   add_subdirectory(bluestore)
   target_link_libraries(os
@@ -42,5 +48,14 @@ if(WITH_BLUESTORE)
   target_link_libraries(ceph-bluestore-tool
     global kv os)
   install(TARGETS ceph-bluestore-tool
+    DESTINATION bin)
+endif()
+
+if(WITH_ZSTORE)
+  add_executable(ceph-zstore-tool
+    zstore/zstore_tool.cc)
+  target_link_libraries(ceph-zstore-tool
+    global os)
+  install(TARGETS ceph-zstore-tool
     DESTINATION bin)
 endif()

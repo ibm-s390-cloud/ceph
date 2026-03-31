@@ -130,6 +130,9 @@
 /* define if bluestore enabled */
 #cmakedefine WITH_BLUESTORE
 
+/* define if zstore enabled */
+#cmakedefine WITH_ZSTORE
+
 /* define if cephfs enabled */
 #cmakedefine WITH_CEPHFS
 
