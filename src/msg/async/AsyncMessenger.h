@@ -37,6 +37,8 @@
 #include "include/ceph_assert.h"
 #include "common/admin_socket.h"
 
+#include "smc/smc_socket_checker.h"
+
 class AsyncMessenger;
 
 /**
@@ -329,6 +331,7 @@ private:
 
   ceph::condition_variable  stop_cond;
   bool stopped = true;
+  SmcSocketChecker smcChecker;
 
   /* You must hold this->lock for the duration of use! */
   const auto& _lookup_conn(const entity_addrvec_t& k) {

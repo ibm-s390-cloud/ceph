@@ -1180,4 +1180,14 @@ void AsyncMessenger::reap_dead()
     }
     deleted_conns.clear();
   }
+
+//#if defined(AF_SMC)
+  if (stack->get_smc_perf_counters()) {
+    smcChecker.updateStatistics();
+    SmcSocketStats stats = smcChecker.getStatistics();
+
+    // Update the single global SMC perf counter
+    stack->get_smc_perf_counters()->set(l_msgr_smc_connections, stats.total_sockets);
+    stack->get_smc_perf_counters()->set(l_msgr_smc_connection_fallbacks, stats.fallback_count);
+  }
 }
